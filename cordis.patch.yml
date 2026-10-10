@@ -1,0 +1,7 @@
+# 项目计划工作台（dsh-workbench-pm-plan）
+# 把服务端入口插入 Harness 插件树；数据目录放在 DSH 数据目录下，卸载工作台不会删除它。
+- insert:
+    - id: pm-plan
+      name: dsh-workbench-pm-plan
+      config:
+        root: !!js dshHomePath('pm-plan')
