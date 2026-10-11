@@ -55,6 +55,8 @@ for (const required of ['dsh/', 'lib/', 'cordis.patch.yml']) {
 
 // 3.1 / 3.3 目录与补丁
 check(await exists('dsh/index.js'), 'dsh/index.js 存在')
+check(await exists('dsh/store.js'), 'dsh/store.js 存在')
+check(await exists('dsh/docs.js'), 'dsh/docs.js 存在')
 check(await exists('lib/client.js'), 'lib/client.js 存在')
 check(await exists('cordis.patch.yml'), 'cordis.patch.yml 存在')
 

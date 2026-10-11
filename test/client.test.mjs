@@ -36,7 +36,7 @@ test('客户端包通过模块加载器注册工作台，声明必需字段', as
 test('首屏在无会话时也能渲染业务面板骨架', async () => {
   const { registration, React } = await boot()
   const markup = renderToStaticMarkup(React.createElement(registration.Component, { service: {}, entry: {}, conversation: null }))
-  for (const label of ['项目计划工作台', '概览', '项目', '工单', '计划', '日历', '风险', '汇报', '新建项目', 'AI 会话', '需关注', '全部端']) {
+  for (const label of ['项目计划工作台', '概览', '项目', '工单', '计划', '需求文档', '日历', '风险', '汇报', '新建项目', 'AI 会话', '需关注', '全部端']) {
     assert.ok(markup.includes(label), `首屏缺少 ${label}`)
   }
   assert.ok(markup.includes('正在读取本机数据'), '未渲染加载态')
@@ -95,6 +95,23 @@ test('各业务页签在有数据时都能渲染出内容', async () => {
     copyReport: noop,
     downloadReport: noop
   }
+  const docsProps = {
+    docs: [
+      { id: 'd1', path: '手机银行/需求说明书.md', name: '需求说明书.md', folder: '手机银行', kind: 'markdown', editable: true, size: 2048, projectId: 'p1', orderId: '', title: '', tags: ['需求'], note: '', version: 'V1.0', addedAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-02T00:00:00.000Z', missing: false },
+      { id: 'd2', path: '手机银行/接口清单.xlsx', name: '接口清单.xlsx', folder: '手机银行', kind: 'excel', editable: false, size: 40960, projectId: 'p1', orderId: '', title: '', tags: [], note: '', version: '', addedAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-02T00:00:00.000Z', missing: false },
+      { id: 'd3', path: '旧稿/已删除.docx', name: '已删除.docx', folder: '旧稿', kind: 'word', editable: false, size: 0, projectId: '', orderId: '', title: '', tags: [], note: '', version: '', addedAt: '', updatedAt: '', missing: true }
+    ],
+    docsRoot: { root: '/Users/x/Documents/项目计划工作台文档', exists: true, indexFile: '/Users/x/Documents/项目计划工作台文档/index.json' },
+    docsRootDraft: '/Users/x/Documents/项目计划工作台文档',
+    docsLoading: false,
+    docsError: '',
+    docsUploading: false,
+    projects: state.projects,
+    orders: state.orders,
+    onReloadDocs: noop, onSetDocsRootDraft: noop, onConfirmDocsRoot: noop, onPickDocsRoot: noop,
+    onUploadDocs: noop, onOpenDoc: noop, onEditDoc: noop, onEditDocMeta: noop, onDeleteDoc: noop,
+    onOpenProject: noop, onNewDoc: noop
+  }
   const expectations = {
     OverviewScreen: ['在管项目', '风险分布', '本周'],
     ProjectsScreen: ['手机银行 6.2 版本迭代', '按模块'],
@@ -102,12 +119,14 @@ test('各业务页签在有数据时都能渲染出内容', async () => {
     PlansScreen: ['与后端确认限额分级口径', '计划'],
     CalendarScreen: ['2026 年 10 月', '回到本月'],
     RisksScreen: ['已逾期'],
-    ReportsScreen: ['草稿', '生成']
+    ReportsScreen: ['草稿', '生成'],
+    DocsScreen: ['文档库位置', '需求说明书.md', '接口清单.xlsx', 'Markdown', 'Excel', '找不到', '导入文档', '新建 Markdown']
   }
   for (const [name, expected] of Object.entries(expectations)) {
     const Screen = screens[name]
     assert.equal(typeof Screen, 'function', `${name} 未导出`)
-    const markup = renderToStaticMarkup(React.createElement(Screen, base))
+    const props = name === 'DocsScreen' ? { ...base, ...docsProps } : base
+    const markup = renderToStaticMarkup(React.createElement(Screen, props))
     assert.ok(markup.length > 200, `${name} 渲染内容过少`)
     assert.ok(!markup.includes('undefined'), `${name} 渲染里出现 undefined`)
     for (const text of expected) assert.ok(markup.includes(text), `${name} 缺少「${text}」`)
@@ -145,10 +164,13 @@ async function mountPanel(options = {}) {
   define('document', dom.window.document)
   define('navigator', dom.window.navigator)
   define('IS_REACT_ACT_ENVIRONMENT', true)
-  const fake = createFakeServer({
-    revision: options.revision ?? 1,
-    state: options.state ?? normalizeState(sampleState(today))
-  })
+  const fake = createFakeServer(
+    {
+      revision: options.revision ?? 1,
+      state: options.state ?? normalizeState(sampleState(today))
+    },
+    { docsPayload: options.docsPayload }
+  )
   globalThis.fetch = fake.request
   const { createRoot } = await import('react-dom/client')
   const { act } = await import('react-dom/test-utils')
@@ -238,6 +260,33 @@ test('jsdom 挂载：切换页签可看到工单、日历、风险与汇报', as
       await panel.act(() => click(node))
       assert.ok(panel.document.body.textContent.includes(expected), `${label} 页签缺少「${expected}」`)
     }
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：需求文档页在服务端有文档数据时正常渲染', async () => {
+  const docsPayload = {
+    root: '/Users/x/Documents/项目计划工作台文档',
+    indexFile: '/Users/x/Documents/项目计划工作台文档/index.json',
+    documents: [
+      { id: 'd1', path: '手机银行/需求说明书.md', name: '需求说明书.md', folder: '手机银行', kind: 'markdown', editable: true, size: 2048, projectId: '', orderId: '', title: '', tags: [], note: '', version: '', addedAt: '', updatedAt: '', missing: false }
+    ],
+    count: 1,
+    missing: 0
+  }
+  const panel = await mountPanel({ docsPayload })
+  try {
+    await panel.flush()
+    const docsTab = [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === '需求文档')
+    assert.ok(docsTab, '没有找到需求文档页签')
+    await panel.act(() => click(docsTab))
+    await panel.flush(60)
+    const text = panel.document.body.textContent
+    assert.ok(text.includes('文档库位置'), '缺少文档库位置卡片')
+    assert.ok(text.includes('需求说明书.md'), '没有列出文档')
+    assert.ok(text.includes('导入文档'), '缺少导入按钮')
+    assert.ok(panel.fake.calls.some((call) => call.url.endsWith('/api/pm-plan/docs')), '没有请求文档列表')
   } finally {
     await panel.cleanup()
   }

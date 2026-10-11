@@ -45,4 +45,66 @@ export async function writeState(revision, state) {
   return parse(response)
 }
 
+/* ---------------- 需求文档库 ---------------- */
+
+export async function readDocs() {
+  return parse(await fetch(`${PREFIX}/docs`, { credentials: 'same-origin', cache: 'no-store' }))
+}
+
+/** 指定/确认文档库根目录（服务端此时才创建目录）。 */
+export async function setDocsRoot(root) {
+  const response = await fetch(`${PREFIX}/docs`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'root', root })
+  })
+  return parse(response)
+}
+
+export async function readDoc(path) {
+  const url = `${PREFIX}/docs/file?path=${encodeURIComponent(path)}`
+  return parse(await fetch(url, { credentials: 'same-origin', cache: 'no-store' }))
+}
+
+export async function writeDoc(path, text) {
+  const response = await fetch(`${PREFIX}/docs/file`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: 'write', path, text })
+  })
+  return parse(response)
+}
+
+export async function uploadDoc(payload) {
+  const response = await fetch(`${PREFIX}/docs/file`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: 'upload', ...payload })
+  })
+  return parse(response)
+}
+
+export async function updateDocMeta(path, patch) {
+  const response = await fetch(`${PREFIX}/docs/meta`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, ...patch })
+  })
+  return parse(response)
+}
+
+export async function docAction(path, action, extra = {}) {
+  const response = await fetch(`${PREFIX}/docs/action`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, action, ...extra })
+  })
+  return parse(response)
+}
+
 export { PREFIX }

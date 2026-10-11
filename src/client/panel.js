@@ -9,7 +9,18 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ApiError, readState, writeState } from './api.js'
+import {
+  ApiError,
+  docAction,
+  readDoc,
+  readDocs,
+  readState,
+  setDocsRoot,
+  updateDocMeta,
+  uploadDoc,
+  writeDoc,
+  writeState
+} from './api.js'
 import {
   Badge,
   Banner,
@@ -27,7 +38,7 @@ import {
   Toast,
   injectStyles
 } from './ui.js'
-import { OverviewScreen, ProjectsScreen, OrdersScreen, PlansScreen, CalendarScreen, RisksScreen, ReportsScreen } from './screens.js'
+import { OverviewScreen, ProjectsScreen, OrdersScreen, PlansScreen, CalendarScreen, RisksScreen, ReportsScreen, DocsScreen } from './screens.js'
 import {
   LOG_KINDS,
   MODULES,
@@ -62,6 +73,7 @@ const TABS = [
   { id: 'projects', label: '项目' },
   { id: 'orders', label: '工单' },
   { id: 'plans', label: '计划' },
+  { id: 'docs', label: '需求文档' },
   { id: 'calendar', label: '日历' },
   { id: 'risks', label: '风险' },
   { id: 'reports', label: '汇报' }
@@ -140,6 +152,15 @@ export function PlanWorkbench({ service, entry, conversation }) {
   const [reportProjectId, setReportProjectId] = useState('')
   const [reportText, setReportText] = useState('')
   const [logDraft, setLogDraft] = useState({ kind: '进展', text: '' })
+  const [docs, setDocs] = useState([])
+  const [docsRoot, setDocsRootInfo] = useState(null)
+  const [docsRootDraft, setDocsRootDraft] = useState('')
+  const [docsLoading, setDocsLoading] = useState(false)
+  const [docsError, setDocsError] = useState('')
+  const [docsUploading, setDocsUploading] = useState(false)
+  const [docEditor, setDocEditor] = useState(null)
+  const [docMeta, setDocMeta] = useState(null)
+  const [docConfirm, setDocConfirm] = useState(null)
   const saveTimer = useRef(null)
   const toastTimer = useRef(null)
   const dataRef = useRef(data)
@@ -332,6 +353,148 @@ export function PlanWorkbench({ service, entry, conversation }) {
     setLogDraft({ kind, text: '' })
   }, [logDraft, mutate])
 
+  const loadDocs = useCallback(async () => {
+    setDocsLoading(true)
+    setDocsError('')
+    try {
+      const payload = await readDocs()
+      setDocs(Array.isArray(payload.documents) ? payload.documents : [])
+      setDocsRootInfo({ root: payload.root, exists: true, indexFile: payload.indexFile || '' })
+      setDocsRootDraft((current) => current || payload.root)
+    } catch (docsLoadError) {
+      const message = docsLoadError instanceof ApiError ? docsLoadError.message : '读取文档库失败。'
+      if (docsLoadError instanceof ApiError && docsLoadError.status === 404) {
+        setDocsError('服务端还没有加载文档接口：请重启 Harness 后再试。')
+      } else {
+        setDocsError(message)
+      }
+    } finally {
+      setDocsLoading(false)
+    }
+  }, [])
+
+  const confirmDocsRoot = useCallback(async () => {
+    try {
+      const info = await setDocsRoot(docsRootDraft)
+      setDocsRootInfo(info)
+      setDocsRootDraft(info.root)
+      await loadDocs()
+      showToast(`文档库已就绪：${info.root}`)
+    } catch (docsRootError) {
+      setDocsError(docsRootError instanceof ApiError ? docsRootError.message : '设置文档库目录失败。')
+    }
+  }, [docsRootDraft, loadDocs, showToast])
+
+  const uploadDocs = useCallback(async (files) => {
+    setDocsUploading(true)
+    setDocsError('')
+    try {
+      const list = [...files]
+      const paths = list.map(file => (typeof file.path === 'string' ? file.path : '')).filter(Boolean)
+      let commonDir = ''
+      if (paths.length > 1) {
+        const segments = paths.map(p => p.split('/').slice(0, -1))
+        const first = segments[0]
+        const shared = []
+        for (let i = 0; i < first.length; i += 1) {
+          const part = first[i]
+          if (segments.every(seg => seg[i] === part)) shared.push(part)
+          else break
+        }
+        commonDir = shared.length ? `${shared.join('/')}/` : ''
+      }
+      for (const file of list) {
+        const relative = commonDir && typeof file.path === 'string' && file.path.startsWith(commonDir)
+          ? file.path.slice(commonDir.length)
+          : (file.webkitRelativePath && file.webkitRelativePath.includes('/')
+              ? file.webkitRelativePath.slice(file.webkitRelativePath.indexOf('/') + 1)
+              : file.name)
+        const clean = relative.split('/').filter(Boolean).join('/') || file.name
+        const folder = clean.includes('/') ? clean.slice(0, clean.lastIndexOf('/')) : ''
+        const base64 = await fileToBase64(file)
+        await uploadDoc({ name: clean.slice(clean.lastIndexOf('/') + 1), folder, base64 })
+      }
+      await loadDocs()
+      showToast(`已导入 ${list.length} 个文档`)
+    } catch (uploadError) {
+      setDocsError(uploadError instanceof ApiError ? uploadError.message : '导入文档失败。')
+    } finally {
+      setDocsUploading(false)
+    }
+  }, [loadDocs, showToast])
+
+  const openDocFile = useCallback(async (doc) => {
+    try {
+      await docAction(doc.path, 'open')
+      showToast(`已用系统默认程序打开：${doc.name}`)
+    } catch (openError) {
+      setDocsError(openError instanceof ApiError ? openError.message : '打开失败。')
+    }
+  }, [showToast])
+
+  const openDocEditor = useCallback(async (doc, text) => {
+    setDocsError('')
+    try {
+      const content = typeof text === 'string' ? { path: doc.path, text, kind: doc.kind, editable: doc.editable } : await readDoc(doc.path)
+      setDocEditor({ doc, text: content.text || '', original: content.text || '' })
+    } catch (readError) {
+      setDocsError(readError instanceof ApiError ? readError.message : '读取文档内容失败。')
+    }
+  }, [])
+
+  const saveDocEditor = useCallback(async () => {
+    if (!docEditor) return
+    try {
+      await writeDoc(docEditor.doc.path, docEditor.text)
+      setDocEditor(null)
+      await loadDocs()
+      showToast('文档已保存')
+    } catch (saveError) {
+      setDocsError(saveError instanceof ApiError ? saveError.message : '保存文档失败。')
+    }
+  }, [docEditor, loadDocs, showToast])
+
+  const createDoc = useCallback(async () => {
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '')
+    const name = `未命名需求文档-${stamp}.md`
+    try {
+      const created = await uploadDoc({
+        name,
+        base64: typeof btoa === 'function' ? btoa(unescape(encodeURIComponent('# 新建需求文档\n\n'))) : '',
+        title: name
+      })
+      await loadDocs()
+      const doc = { path: created.path, name, kind: 'markdown', editable: true }
+      setDocEditor({ doc, text: '# 新建需求文档\n\n', original: '# 新建需求文档\n\n' })
+      showToast('已新建 Markdown 文档')
+    } catch (createError) {
+      setDocsError(createError instanceof ApiError ? createError.message : '新建文档失败。')
+    }
+  }, [loadDocs, showToast])
+
+  const saveDocMeta = useCallback(async (patch) => {
+    if (!docMeta) return
+    try {
+      await updateDocMeta(docMeta.path, patch)
+      setDocMeta(null)
+      await loadDocs()
+      showToast('文档属性已保存')
+    } catch (metaError) {
+      setDocsError(metaError instanceof ApiError ? metaError.message : '保存文档属性失败。')
+    }
+  }, [docMeta, loadDocs, showToast])
+
+  const removeDoc = useCallback(async (doc, deleteFile) => {
+    try {
+      await docAction(doc.path, 'delete', { deleteFile: Boolean(deleteFile) })
+      setDocConfirm(null)
+      await loadDocs()
+      showToast(deleteFile ? '文件已删除' : '已从索引移除，文件仍在原处')
+    } catch (removeError) {
+      setDocsError(removeError instanceof ApiError ? removeError.message : '移除失败。')
+    }
+  }, [loadDocs, showToast])
+
   const generateReport = useCallback(() => {
     setReportText(buildReport(reportKind, { projects, orders, plans, logs }, { today, projectId: reportProjectId || projects[0]?.id }))
   }, [reportKind, projects, orders, plans, logs, today, reportProjectId])
@@ -339,6 +502,10 @@ export function PlanWorkbench({ service, entry, conversation }) {
   useEffect(() => {
     if (view === 'reports' && !reportText) generateReport()
   }, [view, reportText, generateReport])
+
+  useEffect(() => {
+    if (view === 'docs' && !docsLoading && !docs.length && !docsError) loadDocs()
+  }, [view, docs.length, docsLoading, docsError, loadDocs])
 
   const copyReport = useCallback(async () => {
     try {
@@ -419,6 +586,41 @@ export function PlanWorkbench({ service, entry, conversation }) {
     if (view === 'projects') return h(ProjectsScreen, screenProps)
     if (view === 'orders') return h(OrdersScreen, screenProps)
     if (view === 'plans') return h(PlansScreen, screenProps)
+    if (view === 'docs') {
+      return h(DocsScreen, {
+        docs,
+        docsRoot,
+        docsRootDraft,
+        docsLoading,
+        docsError,
+        docsUploading,
+        projects,
+        orders,
+        onReloadDocs: loadDocs,
+        onSetDocsRootDraft: setDocsRootDraft,
+        onConfirmDocsRoot: confirmDocsRoot,
+        onPickDocsRoot: (file) => {
+          const path = typeof file.path === 'string' && file.path ? file.path : ''
+          if (path) {
+            const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : path
+            setDocsRootDraft(dir)
+            showToast(`已填入目录：${dir}`)
+          } else {
+            const first = file.webkitRelativePath ? file.webkitRelativePath.split('/')[0] : ''
+            showToast(first
+              ? `浏览器没有给出完整路径，请把文档库目录粘贴到输入框（例如 ~/Documents/${first}）`
+              : '浏览器没有给出完整路径，请手动粘贴文档库目录')
+          }
+        },
+        onUploadDocs: uploadDocs,
+        onOpenDoc: (doc) => (doc.editable ? openDocEditor(doc) : openDocFile(doc)),
+        onEditDoc: (doc) => openDocEditor(doc),
+        onEditDocMeta: (doc) => setDocMeta(doc),
+        onDeleteDoc: (doc) => setDocConfirm(doc),
+        onOpenProject: openProject,
+        onNewDoc: createDoc
+      })
+    }
     if (view === 'calendar') return h(CalendarScreen, screenProps)
     if (view === 'risks') return h(RisksScreen, screenProps)
     return h(ReportsScreen, screenProps)
@@ -547,6 +749,7 @@ export function PlanWorkbench({ service, entry, conversation }) {
           orders,
           plans,
           logs,
+          docs,
           today,
           logDraft,
           setLogDraft,
@@ -569,6 +772,34 @@ export function PlanWorkbench({ service, entry, conversation }) {
           orders,
           onClose: () => setEditor(null),
           onSubmit: editor.type === 'project' ? saveProject : editor.type === 'order' ? saveOrder : savePlan
+        })
+      : null,
+    docEditor
+      ? h(DocumentModal, {
+          doc: docEditor.doc,
+          text: docEditor.text,
+          dirty: docEditor.text !== docEditor.original,
+          onChange: (value) => setDocEditor((current) => (current ? { ...current, text: value } : current)),
+          onClose: () => setDocEditor(null),
+          onSave: saveDocEditor,
+          onOpenSystem: () => openDocFile(docEditor.doc)
+        })
+      : null,
+    docMeta
+      ? h(DocMetaModal, {
+          doc: docMeta,
+          projects,
+          orders,
+          onClose: () => setDocMeta(null),
+          onSubmit: saveDocMeta
+        })
+      : null,
+    docConfirm
+      ? h(DocConfirmModal, {
+          doc: docConfirm,
+          onClose: () => setDocConfirm(null),
+          onRemoveOnly: () => removeDoc(docConfirm, false),
+          onDeleteFile: () => removeDoc(docConfirm, true)
         })
       : null,
     confirm
@@ -600,7 +831,7 @@ export function PlanWorkbench({ service, entry, conversation }) {
 
 /* ---------------- 详情抽屉 ---------------- */
 
-function DetailDrawer({ type, item, projects, orders, plans, logs, today, logDraft, setLogDraft, onClose, onEdit, onDelete, onAddLog, onSetOrderStage, onOpenProject, onOpenOrder, onOpenPlan, onSelectView }) {
+function DetailDrawer({ type, item, projects, orders, plans, logs, docs, today, logDraft, setLogDraft, onClose, onEdit, onDelete, onAddLog, onSetOrderStage, onOpenProject, onOpenOrder, onOpenPlan, onSelectView }) {
   if (!item) return null
 
   if (type === 'project') {
@@ -668,6 +899,24 @@ function DetailDrawer({ type, item, projects, orders, plans, logs, today, logDra
               )
             )))
           : h('div', { className: 'pmplan-small pmplan-muted' }, '该项目还没有计划。')
+      ),
+      h(Card, {
+        title: `关联需求文档（${(docs || []).filter((doc) => doc.projectId === item.id).length}）`,
+        actions: h(Button, { size: 'small', onClick: () => onSelectView('docs') }, '去文档页')
+      },
+        (docs || []).filter((doc) => doc.projectId === item.id).length
+          ? h('div', { className: 'pmplan-col' }, (docs || []).filter((doc) => doc.projectId === item.id).map((doc) => h('div', {
+              key: doc.path,
+              className: 'pmplan-item'
+            },
+              h('span', { className: 'pmplan-item-title' }, doc.name),
+              h('span', { className: 'pmplan-item-meta' },
+                doc.missing ? h(Badge, { tone: 'danger', children: '找不到' }) : null,
+                doc.version ? `版本 ${doc.version}` : '',
+                doc.tags && doc.tags.length ? doc.tags.join('、') : ''
+              )
+            )))
+          : h('div', { className: 'pmplan-small pmplan-muted' }, '还没有关联文档，去「需求文档」页导入后把属性挂到这个项目。')
       ),
       h(Card, { title: '进展记录' },
         h(LogList, { logs: relatedLogs }),
@@ -882,6 +1131,113 @@ function EditorModal({ type, form, projects, orders, onClose, onSubmit }) {
     ]
   },
     type === 'project' ? projectFields : type === 'order' ? orderFields : planFields
+  )
+}
+
+/** 读文件为 base64（云端/浏览器都可用）。 */
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('读取本地文件失败。'))
+    reader.onload = () => {
+      const result = String(reader.result || '')
+      const comma = result.indexOf(',')
+      resolve(comma < 0 ? '' : result.slice(comma + 1))
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+/** 文档编辑器：Markdown / 纯文本可在这里直接改，保存走服务端原子写入。 */
+function DocumentModal({ doc, text, dirty, onChange, onClose, onSave, onOpenSystem }) {
+  const lines = String(text || '').split('\n').length
+  const chars = String(text || '').length
+  return h(Modal, {
+    title: doc.name,
+    onClose,
+    footer: [
+      h(Button, { key: 'save', variant: 'primary', onClick: onSave, disabled: !dirty }, dirty ? '保存' : '已保存'),
+      h(Button, { key: 'sys', onClick: onOpenSystem }, '用系统程序打开'),
+      h(Button, { key: 'close', onClick: onClose }, '关闭')
+    ]
+  },
+    h('div', { className: 'pmplan-row pmplan-small pmplan-muted' },
+      h('span', null, doc.path),
+      h('span', { className: 'pmplan-spacer' }),
+      h('span', null, `${lines} 行 · ${chars} 字符`),
+      dirty ? h(Badge, { tone: 'warn', children: '未保存' }) : null
+    ),
+    h('textarea', {
+      className: 'pmplan-textarea',
+      style: { minHeight: '46vh', fontFamily: 'var(--dsw-font-family-mono, ui-monospace, monospace)', fontSize: 12.5 },
+      value: text,
+      'aria-label': `${doc.name} 内容`,
+      onChange: (event) => onChange(event.target.value)
+    })
+  )
+}
+
+/** 文档属性：挂到项目/工单、标题、版本、标签、备注。 */
+function DocMetaModal({ doc, projects, orders, onClose, onSubmit }) {
+  const [draft, setDraft] = useState({
+    projectId: doc.projectId || '',
+    orderId: doc.orderId || '',
+    title: doc.title || doc.name,
+    version: doc.version || '',
+    tags: (doc.tags || []).join('、'),
+    note: doc.note || ''
+  })
+  const set = (patch) => setDraft((current) => ({ ...current, ...patch }))
+  const relatedOrders = orders.filter((order) => order.projectId === draft.projectId)
+  return h(Modal, {
+    title: `文档属性 · ${doc.name}`,
+    onClose,
+    footer: [
+      h(Button, { key: 'save', variant: 'primary', onClick: () => onSubmit({ ...draft, tags: draft.tags.split(/[、,，]/).map((tag) => tag.trim()).filter(Boolean) }) }, '保存'),
+      h(Button, { key: 'cancel', onClick: onClose }, '取消')
+    ]
+  },
+    h(TextField, { label: '显示标题', value: draft.title, onChange: (value) => set({ title: value }) }),
+    h(FieldRow, null,
+      h(Select, {
+        label: '所属项目',
+        value: draft.projectId,
+        onChange: (value) => set({ projectId: value, orderId: '' }),
+        options: projects.map((project) => ({ value: project.id, label: project.name })),
+        allowEmpty: true,
+        emptyLabel: '不挂项目'
+      }),
+      h(Select, {
+        label: '关联工单',
+        value: draft.orderId,
+        onChange: (value) => set({ orderId: value }),
+        options: relatedOrders.map((order) => ({ value: order.id, label: order.title })),
+        allowEmpty: true,
+        emptyLabel: '不关联'
+      }),
+      h(TextField, { label: '版本', value: draft.version, onChange: (value) => set({ version: value }), placeholder: '例如 V1.2' })
+    ),
+    h(TextField, { label: '标签（用、分隔）', value: draft.tags, onChange: (value) => set({ tags: value }), placeholder: '例如 需求、评审通过' }),
+    h(TextArea, { label: '备注', value: draft.note, onChange: (value) => set({ note: value }), rows: 3 }),
+    h('div', { className: 'pmplan-small pmplan-muted' }, `文件位置：${doc.path}`)
+  )
+}
+
+/** 移除文档：默认只从索引移除，文件留在原处；删文件需要单独确认。 */
+function DocConfirmModal({ doc, onClose, onRemoveOnly, onDeleteFile }) {
+  return h(Modal, {
+    title: '移除文档',
+    onClose,
+    footer: [
+      h(Button, { key: 'only', variant: 'primary', onClick: onRemoveOnly }, '只从索引移除'),
+      h(Button, { key: 'file', variant: 'danger', onClick: onDeleteFile }, '同时删除本机文件'),
+      h(Button, { key: 'cancel', onClick: onClose }, '取消')
+    ]
+  },
+    h('p', null, doc.name),
+    h('p', { className: 'pmplan-small pmplan-muted' }, `索引位置：${doc.path}`),
+    h('p', { className: 'pmplan-small' }, '「只从索引移除」不会动你的文件，之后重新导入即可恢复登记。'),
+    h('p', { className: 'pmplan-small pmplan-muted' }, '「同时删除本机文件」会真的删掉磁盘上的文件，无法从界面恢复。')
   )
 }
 

@@ -126,7 +126,7 @@ test('服务端路由：GET/POST state 与 health 可用，错误返回 JSON', a
     assert.ok(stateRoute, '缺少 /api/pm-plan/state 路由')
     assert.deepEqual(stateRoute.methods, ['GET', 'POST'])
     assert.ok(healthRoute, '缺少 GET /api/pm-plan/health')
-    assert.equal(fake.routes.size, 2, '不应重复注册同一路径')
+    assert.equal(fake.routes.size, 6, '不应重复注册同一路径')
 
     const initial = await (await stateRoute.fetch({ method: 'GET' })).json()
     assert.equal(initial.revision, 0)
@@ -174,3 +174,77 @@ function rawRequest(text, method = 'POST') {
     }
   }
 }
+
+test('服务端路由：文档库接口齐全且同路径只注册一条', async () => {
+  const root = await temporary()
+  const docsRoot = join(root, '需求文档库')
+  try {
+    const fake = createConnection()
+    apply({ connection: fake.connection }, { root: join(root, 'data'), docsRoot })
+
+    for (const [methods, path] of [['GET,POST', '/api/pm-plan/docs'], ['GET,POST', '/api/pm-plan/docs/file'], ['POST', '/api/pm-plan/docs/meta'], ['POST', '/api/pm-plan/docs/action']]) {
+      assert.ok(fake.routes.get(`${methods} ${path}`), `缺少 ${path}`)
+    }
+    // 业务数据 2 条 + 文档 4 条，且没有路径被注册两次
+    assert.equal(fake.routes.size, 6)
+
+    const listRoute = fake.routes.get('GET,POST /api/pm-plan/docs')
+    const fileRoute = fake.routes.get('GET,POST /api/pm-plan/docs/file')
+    const metaRoute = fake.routes.get('POST /api/pm-plan/docs/meta')
+    const actionRoute = fake.routes.get('POST /api/pm-plan/docs/action')
+
+    const before = await (await listRoute.fetch({ method: 'GET' })).json()
+    assert.equal(before.root, docsRoot)
+    assert.equal(before.count, 0)
+
+    // 建立文档库
+    const created = await (await listRoute.fetch(jsonRequest({ action: 'root', root: docsRoot }, 'POST'))).json()
+    assert.equal(created.exists, true)
+
+    // 上传一个 Markdown
+    const uploaded = await (await fileRoute.fetch(jsonRequest({
+      kind: 'upload',
+      name: '需求说明书.md',
+      folder: '手机银行',
+      base64: Buffer.from('# 需求\n内容\n', 'utf8').toString('base64'),
+      projectId: 'p1'
+    }, 'POST'))).json()
+    assert.equal(uploaded.path, '手机银行/需求说明书.md')
+
+    const listed = await (await listRoute.fetch({ method: 'GET' })).json()
+    assert.equal(listed.count, 1)
+    assert.equal(listed.documents[0].projectId, 'p1')
+
+    // 读取内容
+    const read = await (await fileRoute.fetch({ method: 'GET', url: `http://x/api/pm-plan/docs/file?path=${encodeURIComponent('手机银行/需求说明书.md')}` })).json()
+    assert.match(read.text, /内容/)
+
+    // 越界读取被拒（`..` 属于非法输入，返回 400）
+    const denied = await fileRoute.fetch({ method: 'GET', url: 'http://x/api/pm-plan/docs/file?path=../x.md' })
+    assert.equal(denied.status, 400)
+    // 绝对路径同样被拒
+    const absolute = await fileRoute.fetch({ method: 'GET', url: 'http://x/api/pm-plan/docs/file?path=/etc/hosts' })
+    assert.equal(absolute.status, 400)
+
+    // 写入
+    const written = await (await fileRoute.fetch(jsonRequest({ kind: 'write', path: '手机银行/需求说明书.md', text: '# 需求\n改过了\n' }, 'POST'))).json()
+    assert.ok(written.bytes > 0)
+
+    // 元数据
+    const meta = await (await metaRoute.fetch(jsonRequest({ path: '手机银行/需求说明书.md', version: 'V2.0', tags: ['需求', '评审通过'] }, 'POST'))).json()
+    assert.equal(meta.version, 'V2.0')
+
+    // 未知操作
+    const bad = await actionRoute.fetch(jsonRequest({ path: '手机银行/需求说明书.md', action: 'nope' }, 'POST'))
+    assert.equal(bad.status, 400)
+
+    // 只从索引移除
+    const removed = await (await actionRoute.fetch(jsonRequest({ path: '手机银行/需求说明书.md', action: 'delete' }, 'POST'))).json()
+    assert.equal(removed.fileDeleted, false)
+    const afterRemove = await (await listRoute.fetch({ method: 'GET' })).json()
+    assert.equal(afterRemove.count, 1, '文件还在，只是索引里的元数据被清掉')
+    assert.equal(afterRemove.documents[0].projectId, '', '元数据应被清除')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

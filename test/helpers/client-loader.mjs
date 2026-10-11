@@ -67,12 +67,21 @@ export async function loadClient({ request } = {}) {
 }
 
 /** 一个最小的 fetch 替身：按路径返回内存里的状态文档并记录写入。 */
-export function createFakeServer(initial = { revision: 0, state: { version: 1, projects: [], orders: [], plans: [], logs: [] } }) {
+export function createFakeServer(initial = { revision: 0, state: { version: 1, projects: [], orders: [], plans: [], logs: [] } }, options = {}) {
   const memory = { ...initial, state: { ...initial.state } }
+  const docsPayload = options.docsPayload || {
+    root: '/Users/x/Documents/项目计划工作台文档',
+    indexFile: '/Users/x/Documents/项目计划工作台文档/index.json',
+    documents: [],
+    count: 0,
+    missing: 0
+  }
   const calls = []
   const request = async (url, options = {}) => {
     const path = String(url)
     calls.push({ url: path, method: options.method || 'GET' })
+    if (path.includes('/api/pm-plan/docs/')) return jsonResponse(404, { error: 'not found' })
+    if (path.endsWith('/api/pm-plan/docs')) return jsonResponse(200, docsPayload)
     if (path.endsWith('/api/pm-plan/state') && (!options.method || options.method === 'GET')) {
       return jsonResponse(200, memory)
     }

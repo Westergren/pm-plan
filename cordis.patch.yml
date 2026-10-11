@@ -1,7 +1,9 @@
 # 项目计划工作台（dsh-workbench-pm-plan）
-# 把服务端入口插入 Harness 插件树；数据目录放在 DSH 数据目录下，卸载工作台不会删除它。
+# 把服务端入口插入 Harness 插件树；业务数据放在 DSH 数据目录下，卸载工作台不会删除它。
+# 需求文档库的根目录默认给到「用户文档目录」，但只有你在界面里确认后才会真正创建。
 - insert:
     - id: pm-plan
       name: dsh-workbench-pm-plan
       config:
         root: !!js dshHomePath('pm-plan')
+        docsRoot: !!js String.raw`${process.env.HOME}/Documents/项目计划工作台文档`

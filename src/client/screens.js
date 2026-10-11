@@ -669,3 +669,205 @@ export function ReportsScreen(props) {
 }
 
 export { toneOf }
+
+/* ---------------- 需求文档 ---------------- */
+
+const KIND_LABEL = {
+  markdown: 'Markdown',
+  text: '文本',
+  word: 'Word',
+  excel: 'Excel',
+  pdf: 'PDF',
+  image: '图片',
+  slide: 'PPT',
+  archive: '压缩包',
+  other: '其他'
+}
+
+function formatBytes(size) {
+  const value = Number(size) || 0
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / 1024 / 1024).toFixed(2)} MB`
+}
+
+function shortTime(value) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+export function DocsScreen(props) {
+  const {
+    docs, docsRoot, docsRootDraft, docsLoading, docsError, docsUploading,
+    projects, orders, onReloadDocs, onSetDocsRootDraft, onConfirmDocsRoot, onPickDocsRoot,
+    onUploadDocs, onOpenDoc, onEditDoc, onEditDocMeta, onDeleteDoc, onOpenProject, onNewDoc
+  } = props
+  const [kindFilter, setKindFilter] = useState('')
+  const [projectFilter, setProjectFilter] = useState('')
+  const [keyword, setKeyword] = useState('')
+
+  const projectName = new Map(projects.map((project) => [project.id, project.name]))
+  const rows = docs.filter((doc) => {
+    if (kindFilter && doc.kind !== kindFilter) return false
+    if (projectFilter && doc.projectId !== projectFilter) return false
+    if (keyword) {
+      const haystack = [doc.name, doc.path, doc.title, doc.note, ...(doc.tags || [])].join(' ').toLowerCase()
+      if (!haystack.includes(keyword.toLowerCase())) return false
+    }
+    return true
+  })
+  const kinds = [...new Set(docs.map((doc) => doc.kind))]
+
+  const rootBar = h('div', { className: 'pmplan-card' },
+    h('div', { className: 'pmplan-card-head' },
+      h('span', { className: 'pmplan-card-title' }, '文档库位置'),
+      h('span', { className: 'pmplan-spacer' }),
+      h(Badge, { tone: docsRoot && docsRoot.exists ? 'ok' : 'warn', children: docsRoot && docsRoot.exists ? '就绪' : '未建立' })
+    ),
+    h('div', { className: 'pmplan-row' },
+      h('input', {
+        className: 'pmplan-input',
+        value: docsRootDraft,
+        placeholder: '例如 ~/Documents/项目计划工作台文档',
+        'aria-label': '文档库目录',
+        onChange: (event) => onSetDocsRootDraft(event.target.value)
+      }),
+      h(Button, { variant: 'primary', onClick: onConfirmDocsRoot }, docsRoot && docsRoot.exists ? '切换到这个目录' : '建立文档库'),
+      h('label', { className: 'pmplan-btn' },
+        '选文件夹',
+        h('input', {
+          type: 'file',
+          // 只用来取目录，不会上传所选内容；带 webkitdirectory 时浏览器会把选择范围限制为「目录内的文件」
+          webkitdirectory: '',
+          directory: '',
+          multiple: true,
+          style: { display: 'none' },
+          onChange: (event) => {
+            const file = event.target.files && event.target.files[0]
+            if (file) onPickDocsRoot(file)
+            event.target.value = ''
+          }
+        })
+      )
+    ),
+    h('div', { className: 'pmplan-small pmplan-muted' },
+      docsRoot
+        ? `当前：${docsRoot.root}（索引文件 ${docsRoot.indexFile || 'index.json'}）`
+        : '还没有指定文档库目录。点「建立文档库」会在上面这个路径下创建目录并写入 index.json。'
+    ),
+    h('div', { className: 'pmplan-small pmplan-muted' },
+      '只有你点按钮确认时工作台才会创建目录；文档本体一直在本机，不会上传到任何地方。'
+    )
+  )
+
+  const toolbar = h('div', { className: 'pmplan-row' },
+    h('span', { className: 'pmplan-section-title' }, `文档 ${rows.length} / ${docs.length}`),
+    docs.length && docs.some((doc) => doc.missing)
+      ? h(Badge, { tone: 'danger', children: `${docs.filter((doc) => doc.missing).length} 个找不到` })
+      : null,
+    h('span', { className: 'pmplan-spacer' }),
+    h('input', {
+      className: 'pmplan-input pmplan-search',
+      type: 'search',
+      placeholder: '按文件名 / 标签 / 备注搜索',
+      value: keyword,
+      'aria-label': '搜索文档',
+      onChange: (event) => setKeyword(event.target.value)
+    }),
+    h(Select, {
+      value: kindFilter,
+      onChange: setKindFilter,
+      options: kinds.map((kind) => ({ value: kind, label: KIND_LABEL[kind] || kind })),
+      allowEmpty: true,
+      emptyLabel: '全部类型'
+    }),
+    h(Select, {
+      value: projectFilter,
+      onChange: setProjectFilter,
+      options: projects.map((project) => ({ value: project.id, label: project.name })),
+      allowEmpty: true,
+      emptyLabel: '全部项目'
+    }),
+    h(Button, { onClick: onReloadDocs }, '刷新'),
+    h(Button, { variant: 'primary', onClick: onNewDoc }, '新建 Markdown'),
+    h('label', { className: 'pmplan-btn', 'data-variant': 'primary' },
+      docsUploading ? '上传中…' : '导入文档',
+      h('input', {
+        type: 'file',
+        multiple: true,
+        style: { display: 'none' },
+        onChange: (event) => {
+          const files = [...(event.target.files || [])]
+          if (files.length) onUploadDocs(files)
+          event.target.value = ''
+        }
+      })
+    )
+  )
+
+  const table = docs.length === 0
+    ? h(Empty, {
+        text: docsRoot && docsRoot.exists
+          ? '文档库还是空的，可以「导入文档」或「新建 Markdown」。'
+          : '先在上方建立或指定文档库目录。',
+        action: h(Button, { variant: 'primary', onClick: onNewDoc, disabled: !(docsRoot && docsRoot.exists) }, '新建 Markdown')
+      })
+    : h('div', { className: 'pmplan-table-wrap' },
+        h('table', { className: 'pmplan-table' },
+          h('thead', null, h('tr', null,
+            h('th', null, '文档'),
+            h('th', null, '类型'),
+            h('th', null, '所属项目'),
+            h('th', null, '版本'),
+            h('th', null, '标签'),
+            h('th', null, '大小'),
+            h('th', null, '更新于'),
+            h('th', { className: 'pmplan-cell-actions' }, '操作')
+          )),
+          h('tbody', null, rows.map((doc) => h('tr', { key: doc.path },
+            h('td', null,
+              h('div', { className: 'pmplan-title-cell' }, doc.name),
+              h('div', { className: 'pmplan-small pmplan-muted' }, doc.folder || '（根目录）'),
+              doc.title && doc.title !== doc.name ? h('div', { className: 'pmplan-small pmplan-soft' }, doc.title) : null
+            ),
+            h('td', null,
+              h(Badge, { tone: doc.editable ? 'info' : 'muted', children: KIND_LABEL[doc.kind] || doc.kind }),
+              doc.missing ? h(Badge, { tone: 'danger', children: '找不到' }) : null
+            ),
+            h('td', { className: 'pmplan-muted' },
+              doc.projectId
+                ? h('button', {
+                    type: 'button',
+                    className: 'pmplan-btn',
+                    'data-variant': 'ghost',
+                    style: { padding: 0 },
+                    onClick: () => onOpenProject(doc.projectId)
+                  }, projectName.get(doc.projectId) || '已删除的项目')
+                : h(Button, { size: 'small', variant: 'ghost', onClick: () => onEditDocMeta(doc) }, '挂到项目')
+            ),
+            h('td', { className: 'pmplan-muted' }, doc.version || '—'),
+            h('td', { className: 'pmplan-muted' }, doc.tags && doc.tags.length ? doc.tags.join('、') : '—'),
+            h('td', { className: 'pmplan-nums pmplan-muted' }, formatBytes(doc.size)),
+            h('td', { className: 'pmplan-nums pmplan-muted' }, shortTime(doc.updatedAt || doc.addedAt)),
+            h('td', { className: 'pmplan-cell-actions' },
+              h(Button, { size: 'small', onClick: () => onOpenDoc(doc) }, doc.editable ? '打开' : '用系统程序打开'),
+              doc.editable ? h(Button, { size: 'small', onClick: () => onEditDoc(doc) }, '编辑') : null,
+              h(Button, { size: 'small', onClick: () => onEditDocMeta(doc) }, '属性'),
+              h(Button, { size: 'small', variant: 'danger', onClick: () => onDeleteDoc(doc) }, '移除')
+            )
+          )))
+        )
+      )
+
+  return [
+    h('div', { key: 'root' }, rootBar),
+    h('div', { key: 'toolbar' }, toolbar),
+    docsError ? h(Banner, { key: 'err', tone: 'danger', children: docsError }) : null,
+    docsLoading ? h('div', { key: 'loading', className: 'pmplan-muted pmplan-small' }, '正在读取文档库…') : h('div', { key: 'table' }, table)
+  ]
+}
+
+export { KIND_LABEL, formatBytes, shortTime }
