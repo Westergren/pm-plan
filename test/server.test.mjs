@@ -248,3 +248,30 @@ test('服务端路由：文档库接口齐全且同路径只注册一条', async
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('服务端入口必须是「带 inject 元数据的对象插件」形状（回归 guard）', async () => {
+  const module = await import('../dsh/index.js')
+  // 有 default 导出时，宿主的加载器会解析这个裸函数并丢掉 inject 元数据，
+  // 于是 ctx.connection 取不到、所有接口 404。这里锁死形状。
+  assert.equal(module.default, undefined, '不能有 default 导出')
+  assert.equal(typeof module.apply, 'function', '需要具名 apply 导出')
+  assert.deepEqual(module.inject, ['connection'], 'inject 必须是 connection')
+  assert.equal(module.name, 'dsh-workbench-pm-plan')
+  assert.equal(typeof module.Config, 'function')
+  const source = await readFile(new URL('../dsh/index.js', import.meta.url), 'utf8')
+  const withoutComments = source.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((line) => !line.trim().startsWith('//')).join('\n')
+  assert.ok(!/export\s+default/.test(withoutComments), '源码里不能出现 export default（注释除外）')
+})
+
+test('apply 带注入的 connection 时能注册全部路由；缺少 connection 时给出可读错误', async () => {
+  const root = await temporary()
+  try {
+    const fake = createConnection()
+    apply({ connection: fake.connection }, { root })
+    assert.equal(fake.routes.size, 6)
+    // 模拟「inject 丢失」的场景：ctx 上没有 connection，应抛出可定位的错误
+    assert.throws(() => apply({}, { root: join(root, 'data2') }), /connection/)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

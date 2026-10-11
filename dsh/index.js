@@ -16,6 +16,9 @@ import Schema from '@deepseek-ai/schemastery'
 import { createStore, MAX_STATE_BYTES, StateError } from './store.js'
 import { DocsError, MAX_UPLOAD_BYTES, createDocsStore, relativeToRoot } from './docs.js'
 
+// 注意：本文件**不能**再有 `export default`。宿主的插件加载器会优先解析 default 导出，
+// 那是一个不带元数据的裸函数，会导致下面声明的 inject 被忽略，报
+// `cannot get property "connection" without inject`，进而所有接口 404。
 export const name = 'dsh-workbench-pm-plan'
 export const inject = ['connection']
 export const Config = Schema.object({
@@ -69,10 +72,16 @@ function openWithSystem(absolute) {
   child.unref()
 }
 
-export function apply(ctx, config = {}) {
-  const store = createStore(config.root || join(homedir(), '.dsh-pm-plan'))
+export function apply(ctx, config) {
+  const options = config || {}
+  // 这里显式校验一次：如果 inject 元数据丢失（例如误加了 default 导出），
+  // 宿主不会把 connection 服务注入进来，此时给出能定位的报错而不是一句 undefined。
+  if (!ctx || !ctx.connection || !ctx.connection.fetch) {
+    throw new Error('缺少注入的 connection 服务：请确认服务端入口只导出具名 apply，且 inject = [\'connection\']。')
+  }
+  const store = createStore(options.root || join(homedir(), '.dsh-pm-plan'))
   // docsRoot 缺省时给一个「用户文档目录」下的默认值；仍然只有用户确认后才会创建。
-  const docs = createDocsStore({ root: config.docsRoot || join(homedir(), 'Documents', '项目计划工作台文档') })
+  const docs = createDocsStore({ root: options.docsRoot || join(homedir(), 'Documents', '项目计划工作台文档') })
 
   const failure = (error) => {
     const known = error instanceof StateError || error instanceof DocsError
@@ -212,5 +221,3 @@ export function apply(ctx, config = {}) {
     }
   })
 }
-
-export { apply as default }
