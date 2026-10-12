@@ -21,7 +21,9 @@ import { endOfWeek, startOfWeek, todayISO } from './date.js'
 export const MODULES = ['公司项目', '移动端开发', '日常工作', '其他项目']
 
 export const SMART_VIEWS = [
-  { id: 'all', label: '全部' },
+  // 'all' 是「在管」口径：与 kpis.active 一致，默认排除已完成的项目/工单/计划。
+  // 想看已完成请用 'done'；左侧「模块」轴的「全部」才是不分状态的全量口径。
+  { id: 'all', label: '在管' },
   { id: 'attention', label: '需关注' },
   { id: 'overdue', label: '已逾期' },
   { id: 'week', label: '本周到期' },
