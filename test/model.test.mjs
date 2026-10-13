@@ -77,8 +77,14 @@ test('normalizeState 丢弃脏数据、补默认值、统一枚举', () => {
   assert.equal(state.orders.length, 2)
   assert.equal(state.orders[0].stage, '待评审')
   assert.equal(state.orders[0].priority, '中')
-  assert.equal(state.orders[0].estDays, 365)
-  assert.equal(state.orders[1].projectId, '')
+  // 工单不再有 projectId 与预估人日；存量数据按原项目的模块迁移过来
+  assert.equal(state.orders[0].projectId, undefined)
+  assert.equal(state.orders[0].estDays, undefined)
+  assert.equal(state.orders[0].code, '')
+  assert.equal(state.orders[1].projectId, undefined)
+  // 没有 createdOn 时收敛成 createdAt 当天（空值等于今天，保证看板/表格有日期可显示）
+  assert.match(state.orders[0].createdOn, /^\d{4}-\d{2}-\d{2}$/)
+  assert.equal(state.orders[1].module, '')
 
   assert.equal(state.plans.length, 2)
   assert.equal(state.plans[0].status, '未开始')
@@ -110,14 +116,9 @@ test('emptyState / nextStage / suggestedProgress', () => {
   assert.equal(ORDER_STAGES.length, 8)
 
   const project = { id: 'p1', progress: 20 }
-  const orders = [
-    { projectId: 'p1', stage: '已上线' },
-    { projectId: 'p1', stage: '开发中' },
-    { projectId: 'p2', stage: '已上线' }
-  ]
   const plans = [{ projectId: 'p1', status: '已完成' }, { projectId: 'p1', status: '进行中' }]
-  assert.equal(suggestedProgress(project, orders, plans), 50)
-  assert.equal(suggestedProgress(project, [], []), 20)
+  assert.equal(suggestedProgress(project, plans), 50)
+  assert.equal(suggestedProgress(project, []), 20)
 })
 
 test('仓库里没有把业务数据写死在客户端入口', async () => {

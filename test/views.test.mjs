@@ -6,6 +6,7 @@ import { DEFAULT_MODULES, DEFAULT_PLATFORMS } from '../src/shared/model.js'
 import {
   SMART_VIEWS,
   applyView,
+  attachModuleName,
   attachProjectName,
   groupByModule,
   groupByPlatform,
@@ -30,8 +31,8 @@ const project = (patch) => ({
 })
 
 const order = (patch) => ({
-  id: 'o1', projectId: 'p1', title: '限额调整', kind: '迭代需求', priority: '中', stage: '开发中',
-  owner: '我', target: '', estDays: 3, dueDate: addDays(today, 3), description: '', createdAt: '', updatedAt: '',
+  id: 'o1', code: '', module: '移动端开发', title: '限额调整', kind: '迭代需求', priority: '中', stage: '开发中',
+  owner: '我', target: '', dueDate: addDays(today, 3), createdOn: '2026-09-20', description: '', createdAt: '', updatedAt: '',
   ...patch
 })
 
@@ -67,7 +68,7 @@ test('moduleOptions / platformOptions / targetOptions 并入配置与历史取�
 
 test('applyView：view 为空不做状态过滤，smart 视图各自过滤', () => {
   const projects = [project({ id: 'p1' }), project({ id: 'p2', status: '已完成' }), project({ id: 'p3', dueDate: addDays(today, -2) })]
-  const orders = [order({ id: 'o1', projectId: 'p1' }), order({ id: 'o2', projectId: 'p1', dueDate: addDays(today, -1) })]
+  const orders = [order({ id: 'o1' }), order({ id: 'o2', dueDate: addDays(today, -1) })]
   const plans = [plan({ id: 'n1', projectId: 'p1', dueDate: addDays(today, 1) })]
 
   // 不传 view 是项目/工单页的默认口径：全量保留，已完成的项目也在列表里。
@@ -93,7 +94,7 @@ test('applyView：view 为空不做状态过滤，smart 视图各自过滤', () 
   const week = applyView(projects, orders, plans, { view: 'week' }, today)
   assert.ok(week.orders.every((item) => item.dueDate >= today))
 
-  const unscheduled = applyView([project({ id: 'p9', startedOn: '', dueDate: '' })], [order({ projectId: 'p9', dueDate: '' })], [plan({ projectId: 'p9', dueDate: '' })], { view: 'unscheduled' }, today)
+  const unscheduled = applyView([project({ id: 'p9', startedOn: '', dueDate: '' })], [order({ module: '移动端开发', dueDate: '' })], [plan({ projectId: 'p9', dueDate: '' })], { view: 'unscheduled' }, today)
   assert.equal(unscheduled.projects.length, 1)
   assert.equal(unscheduled.orders.length, 1)
   assert.equal(unscheduled.plans.length, 1)
@@ -101,7 +102,7 @@ test('applyView：view 为空不做状态过滤，smart 视图各自过滤', () 
 
 test('applyView：模块、平台与关键词筛选', () => {
   const projects = [project({ id: 'p1' }), project({ id: 'p2', module: '日常工作', platform: '小程序', name: '周例会' })]
-  const orders = [order({ id: 'o1', projectId: 'p1' }), order({ id: 'o2', projectId: 'p2', title: '例会纪要', description: '' })]
+  const orders = [order({ id: 'o1' }), order({ id: 'o2', module: '日常工作', title: '例会纪要', description: '' })]
   const plans = [plan({ id: 'n1', projectId: 'p1' }), plan({ id: 'n2', projectId: 'p2', title: '整理周报' })]
 
   const byModule = applyView(projects, orders, plans, { moduleId: '日常工作' }, today)
@@ -123,7 +124,7 @@ test('applyView：模块、平台与关键词筛选', () => {
 
 test('applyView：目标端只筛工单，不动项目与计划', () => {
   const projects = [project({ id: 'p1' }), project({ id: 'p2' })]
-  const orders = [order({ id: 'o1', projectId: 'p1', target: '移动手机' }), order({ id: 'o2', projectId: 'p2', target: '车机' })]
+  const orders = [order({ id: 'o1', target: '移动手机' }), order({ id: 'o2', module: '日常工作', target: '车机' })]
   const plans = [plan({ id: 'n1', projectId: 'p1' })]
 
   const scoped = applyView(projects, orders, plans, { target: '车机' }, today)
@@ -134,7 +135,7 @@ test('applyView：目标端只筛工单，不动项目与计划', () => {
 
 test('projectSmartCounts / orderSmartCounts 覆盖全部智能视图且口径各自独立', () => {
   const projects = [project({ id: 'p1' }), project({ id: 'p2', status: '已完成' })]
-  const orders = [order({ id: 'o1', projectId: 'p1' }), order({ id: 'o2', projectId: 'p1', stage: '已上线' })]
+  const orders = [order({ id: 'o1' }), order({ id: 'o2', stage: '已上线' })]
   const plans = [plan({ id: 'n1', projectId: 'p1' })]
   const today2 = '2026-10-10'
 
@@ -184,10 +185,13 @@ test('groupByModule / groupByPlatform 跟随配置，并保留配置外的历史
 test('sortOrders / sortPlans 支持多种排序', () => {
   const projects = [project({})]
   const orders = [order({ id: 'o1', dueDate: addDays(today, 9), priority: '低' }), order({ id: 'o2', dueDate: addDays(today, -1), priority: '紧急' })]
-  assert.equal(sortOrders(orders, projects, today, 'due')[0].id, 'o2')
-  assert.equal(sortOrders(orders, projects, today, 'priority')[0].id, 'o2')
-  assert.equal(sortOrders(orders, projects, today, 'risk')[0].id, 'o2')
-  assert.equal(attachProjectName(orders, projects)[0].projectName, '手机银行迭代')
+  assert.equal(sortOrders(orders, today, 'due')[0].id, 'o2')
+  assert.equal(sortOrders(orders, today, 'priority')[0].id, 'o2')
+  assert.equal(sortOrders(orders, today, 'risk')[0].id, 'o2')
+  // 工单不再显示归属项目，而是它挂的模块
+  assert.equal(attachModuleName(orders)[0].moduleName, '移动端开发')
+  assert.equal(attachModuleName([order({ module: '' })])[0].moduleName, '未归模块')
+  assert.equal(attachProjectName([plan({})], projects)[0].projectName, '手机银行迭代')
   const plans = [plan({ id: 'n1', dueDate: addDays(today, 9) }), plan({ id: 'n2', dueDate: addDays(today, 1) })]
   assert.equal(sortPlans(plans, projects, today, 'due')[0].id, 'n2')
   assert.equal(sortPlans(plans, projects, today, 'risk')[0].id, 'n2')

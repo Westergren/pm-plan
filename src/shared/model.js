@@ -5,11 +5,14 @@
  * {
  *   version, updatedAt, seededAt,
  *   config:   { modules: [名称], platforms: [名称] },   // 用户可在「设置」里增删改，缺字段时回落到 DEFAULT_*
- *   projects: [{ id, name, module, platform, status, owner, startedOn, dueDate, progress, link, summary, tags, createdAt, updatedAt }],
- *   orders:   [{ id, projectId, title, kind, priority, stage, owner, target, estDays, dueDate, description, createdAt, updatedAt }],
+ *   projects: [{ id, code, name, module, platform, status, owner, startedOn, dueDate, progress, link, summary, tags, createdAt, updatedAt }],
+ *   orders:   [{ id, code, module, title, kind, priority, stage, owner, target, dueDate, createdOn, description, createdAt, updatedAt }],
  *   plans:    [{ id, projectId, orderId, title, owner, status, startedOn, dueDate, progress, note, createdAt, updatedAt }],
  *   logs:     [{ id, refType, refId, at, kind, text }]
  * }
+ *
+ * 工单不再归属某个项目，而是直接挂「模块」（order.module）。存量数据里的
+ * `order.projectId` 只在收敛时用来推导模块，收敛后不再保留该字段。
  */
 
 export const STATE_VERSION = 1
@@ -28,6 +31,9 @@ export const DEFAULT_PLATFORMS = ['移动手机', '移动 PAD', '小程序', 'PC
 /** 单个名称的长度上限、一个维度的条目数上限，防止状态文件被撑坏。 */
 export const MAX_DIMENSION_LENGTH = 40
 export const MAX_DIMENSION_ITEMS = 24
+
+/** 项目编号 / 工单编号的长度上限。 */
+export const MAX_CODE_LENGTH = 40
 
 export const ORDER_KINDS = ['迭代需求', '变更需求', '缺陷', '技术任务']
 
@@ -104,6 +110,16 @@ function asDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : ''
 }
 
+/** 取时间戳的**本地**日历日（YYYY-MM-DD），用于从旧数据的 createdAt 推导创建日期。 */
+function asDay(value) {
+  const text = asText(value)
+  if (!text) return ''
+  const date = new Date(text)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (number) => String(number).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
 function asProgress(value, fallback = 0) {
   const number = Number(value)
   if (!Number.isFinite(number)) return fallback
@@ -150,6 +166,8 @@ export function normalizeState(raw, { now = new Date().toISOString() } = {}) {
   }
 
   const projectIds = new Set()
+  /** id → 模块，供存量工单从 projectId 迁移出 module 用。 */
+  const projectModules = new Map()
   for (const item of Array.isArray(source.projects) ? source.projects : []) {
     if (!item || typeof item !== 'object') continue
     const name = asText(item.name).trim().slice(0, 120)
@@ -159,10 +177,13 @@ export function normalizeState(raw, { now = new Date().toISOString() } = {}) {
     projectIds.add(id)
     const moduleValue = asText(item.module).trim().slice(0, MAX_DIMENSION_LENGTH)
     const platformValue = asText(item.platform).trim().slice(0, MAX_DIMENSION_LENGTH)
+    const module = moduleValue || config.modules[0]
+    projectModules.set(id, module)
     projects.push({
       id,
+      code: asText(item.code).trim().slice(0, MAX_CODE_LENGTH),
       name,
-      module: moduleValue || config.modules[0],
+      module,
       platform: platformValue || config.platforms[0],
       status: asEnum(item.status, PROJECT_STATUS, '进行中'),
       owner: asText(item.owner).trim().slice(0, 40) || '我',
@@ -186,19 +207,23 @@ export function normalizeState(raw, { now = new Date().toISOString() } = {}) {
     if (orderIds.has(id)) continue
     orderIds.add(id)
     const projectId = asText(item.projectId).trim()
+    const moduleValue = asText(item.module).trim().slice(0, MAX_DIMENSION_LENGTH)
+    const createdAt = asStamp(item.createdAt, now)
     orders.push({
       id,
-      projectId: projectIds.has(projectId) ? projectId : '',
+      code: asText(item.code).trim().slice(0, MAX_CODE_LENGTH),
+      // 存量工单没有 module：按它原先所属项目的模块迁移；项目已不在时留空（界面显示「未归模块」）。
+      module: moduleValue || projectModules.get(projectId) || '',
       title,
       kind: asEnum(item.kind, ORDER_KINDS, '迭代需求'),
       priority: asEnum(item.priority, PRIORITIES, '中'),
       stage: asEnum(item.stage, ORDER_STAGES, '待评审'),
       owner: asText(item.owner).trim().slice(0, 40),
       target: asText(item.target).trim().slice(0, MAX_DIMENSION_LENGTH),
-      estDays: Math.max(0, Math.min(365, Math.round(Number(item.estDays) || 0))),
       dueDate: asDate(item.dueDate),
+      createdOn: asDate(item.createdOn) || asDay(createdAt),
       description: asText(item.description).slice(0, 2000),
-      createdAt: asStamp(item.createdAt, now),
+      createdAt,
       updatedAt: asStamp(item.updatedAt, now)
     })
   }
@@ -263,11 +288,6 @@ export function normalizeState(raw, { now = new Date().toISOString() } = {}) {
   }
 }
 
-/** 某个项目下未结束的工单数。 */
-export function openOrdersOf(orders, projectId) {
-  return orders.filter((order) => order.projectId === projectId && !DONE_STAGES.includes(order.stage))
-}
-
 /** 某个项目下未完成的计划数。 */
 export function openPlansOf(plans, projectId) {
   return plans.filter((plan) => plan.projectId === projectId && !DONE_PLAN_STATUS.includes(plan.status))
@@ -283,13 +303,14 @@ export function nextStage(stage) {
   return STAGE_FLOW[index + 1]
 }
 
-/** 由「已上线/已取消」工单占比推导项目进度建议值（用于一键同步）。 */
-export function suggestedProgress(project, orders, plans) {
-  const related = orders.filter((order) => order.projectId === project.id)
-  const doneOrders = related.filter((order) => order.stage === '已上线').length
+/**
+ * 由项目下已完成计划的占比推导进度建议值（用于一键同步）。
+ *
+ * 工单已不归属项目，所以这里**只看计划**；曾经按 projectId 汇总工单的那套逻辑随本次改造移除。
+ */
+export function suggestedProgress(project, plans) {
   const relatedPlans = plans.filter((plan) => plan.projectId === project.id)
+  if (!relatedPlans.length) return project.progress
   const donePlans = relatedPlans.filter((plan) => plan.status === '已完成').length
-  const total = related.length + relatedPlans.length
-  if (total === 0) return project.progress
-  return Math.round(((doneOrders + donePlans) / total) * 100)
+  return Math.round((donePlans / relatedPlans.length) * 100)
 }

@@ -106,6 +106,7 @@ const keyedRows = (names) => names.map((name) => {
 })
 
 const EMPTY_PROJECT = (config) => ({
+  code: '',
   name: '',
   module: config.modules[0],
   platform: config.platforms[0],
@@ -118,15 +119,17 @@ const EMPTY_PROJECT = (config) => ({
   summary: ''
 })
 
-const EMPTY_ORDER = (projectId) => ({
-  projectId: projectId || '',
+/** 工单直接挂模块（不再有 projectId）；`module` 缺省用模块列表的第一项。 */
+const EMPTY_ORDER = (config) => ({
+  code: '',
+  module: config.modules[0],
   title: '',
   kind: '迭代需求',
   priority: '中',
   stage: '待评审',
   owner: '我',
   target: '',
-  estDays: 3,
+  createdOn: todayISO(),
   dueDate: addDays(todayISO(), 7),
   description: ''
 })
@@ -380,14 +383,13 @@ export function PlanWorkbench({ service, entry, conversation }) {
   const removeItem = useCallback((type, id) => {
     mutate((state) => {
       if (type === 'project') {
-        const orderIds = new Set(state.orders.filter((order) => order.projectId === id).map((order) => order.id))
+        // 工单挂在模块上，不归项目——删项目只连带它的计划与日志，不能顺手把工单删掉。
         const planIds = new Set(state.plans.filter((plan) => plan.projectId === id).map((plan) => plan.id))
         return {
           ...state,
           projects: dropById(state.projects, id),
-          orders: state.orders.filter((order) => order.projectId !== id),
           plans: state.plans.filter((plan) => plan.projectId !== id),
-          logs: state.logs.filter((log) => !(log.refType === 'project' && log.refId === id) && !(log.refType === 'order' && orderIds.has(log.refId)) && !(log.refType === 'plan' && planIds.has(log.refId)))
+          logs: state.logs.filter((log) => !(log.refType === 'project' && log.refId === id) && !(log.refType === 'plan' && planIds.has(log.refId)))
         }
       }
       const refType = type === 'order' ? 'order' : 'plan'
@@ -631,7 +633,7 @@ export function PlanWorkbench({ service, entry, conversation }) {
     onOpenOrder: openOrder,
     onOpenPlan: openPlan,
     onEditProject: (project) => setEditor({ type: 'project', form: project || EMPTY_PROJECT(config) }),
-    onEditOrder: (order) => setEditor({ type: 'order', form: order || EMPTY_ORDER(projects[0]?.id) }),
+    onEditOrder: (order) => setEditor({ type: 'order', form: order || EMPTY_ORDER(config) }),
     onEditPlan: (plan) => setEditor({ type: 'plan', form: plan || EMPTY_PLAN(projects[0]?.id) }),
     onTogglePlan: togglePlanDone,
     onToggleOrderStage: setOrderStage,
@@ -752,7 +754,7 @@ export function PlanWorkbench({ service, entry, conversation }) {
       }),
       h(Button, { onClick: load, title: '重新加载本机数据' }, '刷新'),
       h(Button, { variant: 'primary', onClick: () => setEditor({ type: 'project', form: EMPTY_PROJECT(config) }) }, '新建项目'),
-      h(Button, { onClick: () => setEditor({ type: 'order', form: EMPTY_ORDER(projects[0]?.id) }) }, '新建工单'),
+      h(Button, { onClick: () => setEditor({ type: 'order', form: EMPTY_ORDER(config) }) }, '新建工单'),
       h(Button, { onClick: () => setEditor({ type: 'plan', form: EMPTY_PLAN(projects[0]?.id) }) }, '新建计划'),
       h(Button, { onClick: () => setSettingsOpen(true), title: '配置模块、端与示例数据' }, '设置'),
       h(Button, {
@@ -916,13 +918,12 @@ function DetailDrawer({ type, item, projects, orders, plans, logs, docs, today, 
   if (!item) return null
 
   if (type === 'project') {
-    const relatedOrders = orders.filter((order) => order.projectId === item.id)
     const relatedPlans = plans.filter((plan) => plan.projectId === item.id)
     const relatedLogs = logs.filter((log) => log.refType === 'project' && log.refId === item.id)
-    const risk = projectRisk(item, orders, plans, today)
+    const risk = projectRisk(item, plans, today)
     return h(Drawer, {
       title: item.name,
-      subtitle: `${item.module} · ${item.platform} · ${item.status}`,
+      subtitle: `${item.code ? `${item.code} · ` : ''}${item.module} · ${item.platform} · ${item.status}`,
       onClose,
       footer: [
         h(Button, { key: 'edit', variant: 'primary', onClick: () => onEdit(item) }, '编辑'),
@@ -933,13 +934,14 @@ function DetailDrawer({ type, item, projects, orders, plans, logs, docs, today, 
       h('div', { className: 'pmplan-row' },
         h(Badge, { tone: riskTone(risk), children: `风险 ${risk}` }),
         h(Badge, { tone: 'info', children: `进度 ${item.progress}%` }),
-        h(Badge, { tone: 'muted', children: item.dueDate ? `截止 ${formatDate(item.dueDate)}` : '未排期' })
+        h(Badge, { tone: 'muted', children: item.dueDate ? `投产 ${formatDate(item.dueDate)}` : '未排期' })
       ),
       h(Progress, { value: item.progress, tone: RISK_TONE[risk] }),
       h(KeyValues, {
         rows: [
+          ['项目编号', item.code || '—'],
           ['负责人', item.owner || '未指派'],
-          ['起止', `${formatDate(item.startedOn, '未填')} ~ ${formatDate(item.dueDate, '未填')}`],
+          ['开始 / 投产', `${formatDate(item.startedOn, '未填')} ~ ${formatDate(item.dueDate, '未填')}`],
           ['链接', item.link ? h('a', { href: item.link, target: '_blank', rel: 'noreferrer' }, item.link) : '—'],
           ['标签', item.tags?.length ? item.tags.join('、') : '—'],
           ['更新于', formatDateTime(item.updatedAt, '—')]
@@ -947,11 +949,14 @@ function DetailDrawer({ type, item, projects, orders, plans, logs, docs, today, 
       }),
       item.summary ? h(Card, { title: '说明' }, h('div', { className: 'pmplan-soft' }, item.summary)) : null,
       h(Card, {
-        title: `需求 / 变更工单（${relatedOrders.length}）`,
+        title: `本模块工单（${orders.filter((order) => order.module === item.module).length}）`,
         actions: h(Button, { size: 'small', onClick: () => onSelectView('orders') }, '去工单页')
       },
-        relatedOrders.length
-          ? h('div', { className: 'pmplan-col' }, relatedOrders.map((order) => h('button', {
+        orders.filter((order) => order.module === item.module).length
+          ? h('div', { className: 'pmplan-small pmplan-muted', style: { marginBottom: 6 } }, '工单挂在模块上，不是挂在单个项目上，下面是同模块的工单。')
+          : null,
+        orders.filter((order) => order.module === item.module).length
+          ? h('div', { className: 'pmplan-col' }, orders.filter((order) => order.module === item.module).map((order) => h('button', {
               key: order.id,
               type: 'button',
               className: 'pmplan-item',
@@ -960,10 +965,10 @@ function DetailDrawer({ type, item, projects, orders, plans, logs, docs, today, 
               h('span', { className: 'pmplan-item-title' }, order.title),
               h('span', { className: 'pmplan-item-meta' },
                 h(Badge, { tone: RISK_TONE[orderRisk(order, today)], children: orderRisk(order, today) }),
-                `${order.kind} · ${order.stage} · ${formatDate(order.dueDate)}`
+                `${order.kind} · ${order.stage} · 投产 ${formatDate(order.dueDate)}`
               )
             )))
-          : h('div', { className: 'pmplan-small pmplan-muted' }, '该项目还没有工单。')
+          : h('div', { className: 'pmplan-small pmplan-muted' }, '该模块下还没有工单。')
       ),
       h(Card, { title: `计划与跟进（${relatedPlans.length}）` },
         relatedPlans.length
@@ -1007,13 +1012,12 @@ function DetailDrawer({ type, item, projects, orders, plans, logs, docs, today, 
   }
 
   if (type === 'order') {
-    const project = projects.find((entryItem) => entryItem.id === item.projectId)
     const relatedPlans = plans.filter((plan) => plan.orderId === item.id)
     const relatedLogs = logs.filter((log) => log.refType === 'order' && log.refId === item.id)
     const risk = orderRisk(item, today)
     return h(Drawer, {
       title: item.title,
-      subtitle: `${item.kind} · ${item.priority}优先级 · ${item.stage}`,
+      subtitle: `${item.code ? `${item.code} · ` : ''}${item.kind} · ${item.priority}优先级 · ${item.stage}`,
       onClose,
       footer: [
         h(Button, { key: 'edit', variant: 'primary', onClick: () => onEdit(item) }, '编辑'),
@@ -1024,16 +1028,16 @@ function DetailDrawer({ type, item, projects, orders, plans, logs, docs, today, 
       h('div', { className: 'pmplan-row' },
         h(Badge, { tone: RISK_TONE[risk], children: `风险 ${risk}` }),
         h(Badge, { tone: 'info', children: item.stage }),
-        project
-          ? h(Button, { size: 'small', variant: 'ghost', onClick: () => onOpenProject(project.id) }, `项目：${project.name}`)
-          : h(Badge, { tone: 'muted', children: '未归项目' })
+        h(Badge, { tone: 'muted', children: `模块：${item.module || '未归模块'}` })
       ),
       h(KeyValues, {
         rows: [
+          ['工单编号', item.code || '—'],
+          ['模块', item.module || '未归模块'],
           ['负责人', item.owner || '未指派'],
           ['目标端', item.target || '未填'],
-          ['截止', formatDate(item.dueDate, '未排期')],
-          ['预估', item.estDays ? `${item.estDays} 人日` : '—'],
+          ['创建日期', formatDate(item.createdOn, '未填')],
+          ['投产日期', formatDate(item.dueDate, '未排期')],
           ['更新于', formatDateTime(item.updatedAt, '—')]
         ]
       }),
@@ -1147,10 +1151,15 @@ function EditorModal({ type, form, projects, orders, moduleNames, platformNames,
       ? (draft.id ? '编辑工单' : '新建工单')
       : (draft.id ? '编辑计划' : '新建计划')
   const valid = type === 'project' ? draft.name.trim().length > 0 : draft.title.trim().length > 0
-  const relatedOrders = orders.filter((order) => order.projectId === draft.projectId)
+  // 计划仍然挂在项目下，但工单只挂模块——所以「关联工单」给的是所选项目所在模块的工单。
+  const draftProject = projects.find((project) => project.id === draft.projectId)
+  const relatedOrders = draftProject ? orders.filter((order) => order.module === draftProject.module) : []
 
   const projectFields = [
-    h(TextField, { key: 'name', label: '项目名称', value: draft.name, onChange: (value) => set({ name: value }), placeholder: '例如：手机银行 6.2 版本迭代' }),
+    h(FieldRow, { key: 'row0' },
+      h(TextField, { label: '项目编号', value: draft.code, onChange: (value) => set({ code: value }), placeholder: '例如：PRJ-2610' }),
+      h(TextField, { label: '项目名称', value: draft.name, onChange: (value) => set({ name: value }), placeholder: '例如：手机银行 6.2 版本迭代' })
+    ),
     h(FieldRow, { key: 'row1' },
       h(Select, { label: '模块', value: draft.module, onChange: (value) => set({ module: value }), options: toOptions(withCurrent(moduleNames, draft.module)) }),
       h(Select, { label: '端', value: draft.platform, onChange: (value) => set({ platform: value }), options: toOptions(withCurrent(platformNames, draft.platform)) }),
@@ -1159,7 +1168,7 @@ function EditorModal({ type, form, projects, orders, moduleNames, platformNames,
     h(FieldRow, { key: 'row2' },
       h(TextField, { label: '负责人', value: draft.owner, onChange: (value) => set({ owner: value }) }),
       h(TextField, { label: '开始日期', type: 'date', value: draft.startedOn, onChange: (value) => set({ startedOn: value }) }),
-      h(TextField, { label: '截止日期', type: 'date', value: draft.dueDate, onChange: (value) => set({ dueDate: value }) })
+      h(TextField, { label: '投产日期', type: 'date', value: draft.dueDate, onChange: (value) => set({ dueDate: value }) })
     ),
     h(FieldRow, { key: 'row3' },
       h(TextField, { label: '进度 %', type: 'number', min: 0, max: 100, value: draft.progress, onChange: (value) => set({ progress: value }) }),
@@ -1169,9 +1178,12 @@ function EditorModal({ type, form, projects, orders, moduleNames, platformNames,
   ]
 
   const orderFields = [
-    h(TextField, { key: 'title', label: '工单标题', value: draft.title, onChange: (value) => set({ title: value }), placeholder: '例如：转账限额调整（含人脸复核）' }),
+    h(FieldRow, { key: 'row0' },
+      h(TextField, { label: '工单编号', value: draft.code, onChange: (value) => set({ code: value }), placeholder: '例如：WO-2609' }),
+      h(TextField, { label: '工单标题', value: draft.title, onChange: (value) => set({ title: value }), placeholder: '例如：转账限额调整（含人脸复核）' })
+    ),
     h(FieldRow, { key: 'row1' },
-      h(Select, { label: '所属项目', value: draft.projectId, onChange: (value) => set({ projectId: value }), options: projects.map((project) => ({ value: project.id, label: project.name })), allowEmpty: true, emptyLabel: '未归项目' }),
+      h(Select, { label: '模块', value: draft.module, onChange: (value) => set({ module: value }), options: toOptions(withCurrent(moduleNames, draft.module)), allowEmpty: true, emptyLabel: '未归模块' }),
       h(Select, { label: '类型', value: draft.kind, onChange: (value) => set({ kind: value }), options: toOptions(ORDER_KINDS) }),
       h(Select, { label: '优先级', value: draft.priority, onChange: (value) => set({ priority: value }), options: toOptions(PRIORITIES) })
     ),
@@ -1181,8 +1193,8 @@ function EditorModal({ type, form, projects, orders, moduleNames, platformNames,
       h(TextField, { label: '负责人', value: draft.owner, onChange: (value) => set({ owner: value }) })
     ),
     h(FieldRow, { key: 'row3' },
-      h(TextField, { label: '预估人日', type: 'number', min: 0, value: draft.estDays, onChange: (value) => set({ estDays: value }) }),
-      h(TextField, { label: '期望截止', type: 'date', value: draft.dueDate, onChange: (value) => set({ dueDate: value }) })
+      h(TextField, { label: '创建日期', type: 'date', value: draft.createdOn, onChange: (value) => set({ createdOn: value }) }),
+      h(TextField, { label: '投产日期', type: 'date', value: draft.dueDate, onChange: (value) => set({ dueDate: value }) })
     ),
     h(TextArea, { key: 'description', label: '描述', value: draft.description, onChange: (value) => set({ description: value }), placeholder: '变更点、验收口径、影响范围' })
   ]
@@ -1391,7 +1403,9 @@ function DocMetaModal({ doc, projects, orders, onClose, onSubmit }) {
     note: doc.note || ''
   })
   const set = (patch) => setDraft((current) => ({ ...current, ...patch }))
-  const relatedOrders = orders.filter((order) => order.projectId === draft.projectId)
+  // 工单挂模块不挂项目，所以「关联工单」按所选项目所在模块给候选。
+  const draftProject = projects.find((project) => project.id === draft.projectId)
+  const relatedOrders = draftProject ? orders.filter((order) => order.module === draftProject.module) : []
   return h(Modal, {
     title: `文档属性 · ${doc.name}`,
     onClose,
@@ -1448,7 +1462,7 @@ function ConfirmModal({ payload, onClose, onConfirm }) {
   const label = payload.type === 'clear'
     ? '清空所有数据（项目、工单、计划、进展记录）'
     : payload.type === 'project'
-      ? '删除该项目及其下的工单、计划与进展记录'
+      ? '删除该项目及其下的计划与进展记录（工单挂在模块上，不受影响）'
       : payload.type === 'order'
         ? '删除该工单（关联计划的关联关系会解除）'
         : '删除该计划'

@@ -129,8 +129,8 @@ export function Timeline({ model, onOpen }) {
       const right = positionOf(row.dueDate, from, to)
       const width = Math.max(1.2, right - left)
       return h('div', { className: 'pmplan-timeline-row', key: row.kind + row.id },
-        h('span', { className: 'pmplan-timeline-label', title: `${row.title}（${row.projectName}）` },
-          h('span', { className: 'pmplan-soft' }, row.projectName === row.title ? '' : `${row.projectName} · `),
+        h('span', { className: 'pmplan-timeline-label', title: `${row.title}（${row.sourceName}）` },
+          h('span', { className: 'pmplan-soft' }, row.sourceName === row.title ? '' : `${row.sourceName} · `),
           row.title
         ),
         h('span', { className: 'pmplan-timeline-track' },
@@ -141,7 +141,8 @@ export function Timeline({ model, onOpen }) {
             'data-tone': riskTone(row.risk),
             style: { left: `${left}%`, width: `${width}%` },
             title: `${row.title}｜${formatShortDate(row.startedOn)} ~ ${formatShortDate(row.dueDate)}｜${row.risk}`,
-            onClick: () => onOpen?.(row.projectId)
+            // 工单挂模块、没有 projectId：这类横条不打开项目详情。
+            onClick: row.projectId ? () => onOpen?.(row.projectId) : undefined
           })
         )
       )
@@ -149,7 +150,7 @@ export function Timeline({ model, onOpen }) {
     h('div', { className: 'pmplan-row pmplan-small pmplan-muted' },
       h('span', null, `区间 ${from} ~ ${to}`),
       h('span', { className: 'pmplan-spacer' }),
-      h('span', null, '点击横条打开项目详情')
+      h('span', null, '点击横条打开项目详情（工单按模块归类，无项目详情）')
     )
   )
 }

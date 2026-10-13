@@ -15,8 +15,8 @@ const project = (patch) => ({
 })
 
 const order = (patch) => ({
-  id: 'o1', projectId: 'p1', title: '限额调整', kind: '迭代需求', priority: '高', stage: '开发中',
-  owner: '我', target: '', estDays: 3, dueDate: addDays(today, 2), description: '', createdAt: '', updatedAt: '',
+  id: 'o1', code: 'WO-1', module: '移动端开发', title: '限额调整', kind: '迭代需求', priority: '高', stage: '开发中',
+  owner: '我', target: '', dueDate: addDays(today, 2), createdOn: '2026-09-25', description: '', createdAt: '', updatedAt: '',
   ...patch
 })
 
@@ -83,14 +83,18 @@ test('quarterlyReport 输出季度区间与多端进展', () => {
   assert.match(text, /移动手机/)
 })
 
-test('projectReport 汇总工单、计划与进展记录', () => {
+test('projectReport 汇总计划与进展记录', () => {
   const state = stateOf([project({})], [order({})], [plan({})], logs)
-  const text = projectReport(state.projects[0], state.orders, state.plans, state.logs, today)
+  const text = projectReport(state.projects[0], state.plans, state.logs, today)
   assert.match(text, /^# 手机银行迭代 · 状态汇报/)
-  assert.match(text, /## 需求与变更工单/)
+  assert.match(text, /模块：移动端开发｜端：移动手机/)
+  assert.match(text, /投产：/)
+  // 工单挂模块、不归项目，所以项目汇报里不再有需求工单小节
+  assert.ok(!text.includes('## 需求与变更工单'))
   assert.match(text, /## 工作计划与跟进/)
   assert.match(text, /评审通过/)
-  assert.match(text, /等待口径/)
+  // 进展记录按项目/其计划关联；工单的日志不再算进项目汇报
+  assert.ok(!text.includes('等待口径'))
 })
 
 test('buildReport 按类型分发，project 缺项目时给出兜底文案', () => {

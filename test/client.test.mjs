@@ -552,3 +552,111 @@ test('工作台身份使用真实仓库地址，并能解析成 owner/repo', asy
   assert.equal(`${match[1]}/${match[2]}`.toLowerCase(), 'westergren/pm-plan')
   assert.equal(typeof exported.apply, 'function')
 })
+
+test('jsdom 挂载：工单页显示编号、模块、创建日期与投产日期', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    const tab = (label) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === label)
+    await panel.act(() => click(tab('工单')))
+    const headers = [...panel.document.querySelectorAll('thead th')].map((node) => node.textContent)
+    assert.deepEqual(headers.slice(0, 9), ['工单编号', '工单', '模块', '类型', '优先级', '阶段', '负责人', '创建日期', '投产日期'])
+    const text = panel.document.body.textContent
+    assert.ok(text.includes('WO-2601'), '表格没有显示工单编号')
+    assert.ok(text.includes('2026-09-22'), '表格没有显示创建日期')
+    assert.ok(!text.includes('所属项目'), '工单页不该再有「所属项目」')
+    assert.ok(!text.includes('预估'), '工单页不该再有「预估人日」')
+
+    // 切到看板：卡片标题按钮必须允许换行（不用 nowrap 的 .pmplan-btn），副标题显示模块名
+    const boardToggle = [...panel.document.querySelectorAll('button')].find((node) => node.textContent === '看板')
+    assert.ok(boardToggle, '没有看板切换按钮')
+    await panel.act(() => click(boardToggle))
+    const titleButtons = [...panel.document.querySelectorAll('.pmplan-board .pmplan-btn-block')]
+    assert.ok(titleButtons.length > 0, '看板卡片标题没有使用可换行的按钮样式')
+    const card = titleButtons.find((node) => node.textContent.includes('转账限额调整（含人脸复核）'))
+    assert.ok(card, '看板里没有找到示例工单')
+    assert.ok(card.closest('.pmplan-board-col').textContent.includes('移动端开发'), '看板卡片没有显示模块名')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：工单表单挂模块、带编号与创建日期，没有所属项目与预估人日', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    const button = [...panel.document.querySelectorAll('button')].find((node) => node.textContent === '新建工单')
+    await panel.act(() => click(button))
+    const dialog = panel.document.querySelector('[role="dialog"]')
+    assert.ok(dialog, '没有打开工单弹窗')
+    const text = dialog.textContent
+    for (const label of ['工单编号', '模块', '创建日期', '投产日期']) {
+      assert.ok(text.includes(label), `工单表单缺少「${label}」`)
+    }
+    assert.ok(!text.includes('所属项目'), '工单表单不该再有「所属项目」')
+    assert.ok(!text.includes('预估人日'), '工单表单不该再有「预估人日」')
+    assert.ok(dialog.textContent.includes('未归模块'), '模块下拉应允许留空')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：项目表单有项目编号与投产日期，没有截止日期', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    const button = [...panel.document.querySelectorAll('button')].find((node) => node.textContent === '新建项目')
+    await panel.act(() => click(button))
+    const dialog = panel.document.querySelector('[role="dialog"]')
+    assert.ok(dialog, '没有打开项目弹窗')
+    for (const label of ['项目编号', '投产日期']) {
+      assert.ok(dialog.textContent.includes(label), `项目表单缺少「${label}」`)
+    }
+    assert.ok(!dialog.textContent.includes('截止日期'), '项目表单不该再叫「截止日期」')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：删掉项目不会连带删掉挂在同一模块上的工单', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    const before = panel.fake.memory.state
+    const target = before.projects.find((project) => project.name === '手机银行 6.2 版本迭代')
+    assert.ok(target, '没有找到示例项目')
+
+    const tab = (label) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === label)
+    await panel.act(() => click(tab('项目')))
+    const cardButton = [...panel.document.querySelectorAll('button')].find((node) => node.textContent === target.name)
+    await panel.act(() => click(cardButton))
+    const drawer = panel.document.querySelector('[role="dialog"]')
+    assert.ok(drawer, '没有打开项目抽屉')
+    assert.ok(!drawer.textContent.includes('需求 / 变更工单'), '项目抽屉不该再列工单')
+
+    const del = [...drawer.querySelectorAll('button')].find((node) => node.textContent === '删除')
+    await panel.act(() => click(del))
+    const confirmDialog = [...panel.document.querySelectorAll('[role="dialog"]')].pop()
+    assert.ok(confirmDialog.textContent.includes('工单挂在模块上'), '确认文案没有说明工单不受影响')
+    const ok = [...confirmDialog.querySelectorAll('button')].find((node) => node.textContent === '确认执行')
+    await panel.act(() => click(ok))
+    await panel.flush(600)
+
+    const after = panel.fake.memory.state
+    assert.equal(after.projects.some((project) => project.id === target.id), false, '项目没有被删除')
+    assert.equal(after.orders.length, before.orders.length, '工单被连带删掉了')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('看板样式：阶段列按行平铺，不再横向滚动；卡片标题允许换行', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const css = await readFile(new URL('../src/client/styles.js', import.meta.url), 'utf8')
+  const board = css.slice(css.indexOf('.pmplan-board {'), css.indexOf('.pmplan-board-col'))
+  assert.ok(!board.includes('grid-auto-flow: column'), '阶段列仍是横向排布')
+  assert.ok(!board.includes('overflow-x'), '阶段列仍靠横向滚动')
+  assert.ok(board.includes('repeat(auto-fill'), '阶段列没有改成可换行的平铺网格')
+  const block = css.slice(css.indexOf('.pmplan-btn-block'), css.indexOf('.pmplan-btn-block:hover'))
+  assert.ok(block.includes('white-space: normal'), '卡片标题按钮仍然禁止换行')
+})

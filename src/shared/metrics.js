@@ -134,8 +134,12 @@ export function planRisk(plan, today = todayISO()) {
   return '正常'
 }
 
-/** 项目风险：项目自身截止 + 其下未结束工单/计划里最严重的一档。 */
-export function projectRisk(project, orders = [], plans = [], today = todayISO()) {
+/**
+ * 项目风险：项目自身截止 + 其下未结束计划里最严重的一档。
+ *
+ * 工单已不归属项目（改挂模块），所以不再参与项目风险的汇总。
+ */
+export function projectRisk(project, plans = [], today = todayISO()) {
   if (isProjectDone(project)) return '已完成'
   if (project.status === '阻塞') return '阻塞'
   const levels = []
@@ -144,10 +148,6 @@ export function projectRisk(project, orders = [], plans = [], today = todayISO()
   if (project.status !== '待启动' && project.status !== '暂停' && project.dueDate) {
     const ratio = timeRatio(project.startedOn, project.dueDate, today)
     if (ratio !== null && ratio - project.progress >= 30) levels.push('进度风险')
-  }
-  for (const order of orders) {
-    if (order.projectId !== project.id || isOrderDone(order)) continue
-    levels.push(orderRisk(order, today))
   }
   for (const plan of plans) {
     if (plan.projectId !== project.id || isPlanDone(plan)) continue
@@ -170,18 +170,18 @@ export function needsAttention(level) {
   return ['已逾期', '阻塞', '紧急', '进度风险'].includes(level)
 }
 
-export function decorateProjects(projects, orders, plans, today = todayISO()) {
+/**
+ * 给项目补上风险与统计。工单不归属项目，所以这里只有计划口径；
+ * 「工单 X/Y 未结束」这类跨归属的汇总随本次改造移除。
+ */
+export function decorateProjects(projects, plans, today = todayISO()) {
   return projects.map((project) => {
-    const relatedOrders = orders.filter((order) => order.projectId === project.id)
     const relatedPlans = plans.filter((plan) => plan.projectId === project.id)
-    const risk = projectRisk(project, orders, plans, today)
+    const risk = projectRisk(project, relatedPlans, today)
     return {
       ...project,
       risk,
       attention: needsAttention(risk),
-      orderTotal: relatedOrders.length,
-      orderOpen: relatedOrders.filter((order) => !isOrderDone(order)).length,
-      orderOverdue: relatedOrders.filter((order) => orderRisk(order, today) === '已逾期').length,
       planTotal: relatedPlans.length,
       planOpen: relatedPlans.filter((plan) => !isPlanDone(plan)).length,
       planOverdue: relatedPlans.filter((plan) => planRisk(plan, today) === '已逾期').length,
@@ -191,7 +191,7 @@ export function decorateProjects(projects, orders, plans, today = todayISO()) {
 }
 
 export function kpis(projects, orders, plans, today = todayISO()) {
-  const decorated = decorateProjects(projects, orders, plans, today)
+  const decorated = decorateProjects(projects, plans, today)
   const active = decorated.filter((project) => !isProjectDone(project))
   const openOrders = orders.filter((order) => !isOrderDone(order))
   const openPlans = plans.filter((plan) => !isPlanDone(plan))
@@ -217,23 +217,27 @@ export function kpis(projects, orders, plans, today = todayISO()) {
 
 export function riskBreakdown(projects, orders, plans, today = todayISO()) {
   const counts = new Map(RISK_LEVELS.map((level) => [level, 0]))
-  for (const project of decorateProjects(projects, orders, plans, today)) {
+  for (const project of decorateProjects(projects, plans, today)) {
     counts.set(project.risk, (counts.get(project.risk) || 0) + 1)
   }
   return RISK_LEVELS.map((level) => ({ level, count: counts.get(level) || 0, tone: riskTone(level) }))
 }
 
-/** 平台负载：按端统计项目数与未结束工单数。端列表来自配置项 + 数据里出现过的历史取值。 */
+/**
+ * 平台负载：项目按它登记的「端」归口，工单按它的「目标端」归口——两者取的是同一份
+ * 端配置，所以能放进同一组桶里。端列表来自配置项 + 数据里出现过的历史取值。
+ */
 export function platformLoad(projects, orders, today = todayISO(), platforms = DEFAULT_PLATFORMS) {
   const names = [...platforms]
-  for (const project of projects) {
-    const name = String(project.platform == null ? '' : project.platform).trim()
+  const remember = (value) => {
+    const name = String(value == null ? '' : value).trim()
     if (name && !names.includes(name)) names.push(name)
   }
+  for (const project of projects) remember(project.platform)
+  for (const order of orders) remember(order.target)
   const rows = names.map((platform) => {
     const items = projects.filter((project) => project.platform === platform)
-    const ids = new Set(items.map((project) => project.id))
-    const related = orders.filter((order) => ids.has(order.projectId) && !isOrderDone(order))
+    const related = orders.filter((order) => order.target === platform && !isOrderDone(order))
     return {
       platform,
       projects: items.length,
@@ -276,8 +280,8 @@ export function ownerWorkload(projects, orders, plans, today = todayISO()) {
 }
 
 /** 按状态分列的项目看板。 */
-export function statusColumns(projects, orders, plans, today = todayISO()) {
-  const decorated = decorateProjects(projects, orders, plans, today)
+export function statusColumns(projects, plans, today = todayISO()) {
+  const decorated = decorateProjects(projects, plans, today)
   return PROJECT_STATUS.map((status) => {
     const items = decorated
       .filter((project) => project.status === status)
@@ -286,22 +290,28 @@ export function statusColumns(projects, orders, plans, today = todayISO()) {
   })
 }
 
-export function orderBoardColumns(orders, projects, today = todayISO()) {
-  const projectName = new Map(projects.map((project) => [project.id, project.name]))
+/** 工单看板：按阶段分列。`moduleName` 是工单自己的归属模块，不再有项目名。 */
+export function orderBoardColumns(orders, today = todayISO()) {
   return ORDER_STAGES.map((stage) => {
     const items = orders
       .filter((order) => order.stage === stage)
-      .map((order) => ({ ...order, risk: orderRisk(order, today), projectName: projectName.get(order.projectId) || '未归项目' }))
+      .map((order) => ({ ...order, risk: orderRisk(order, today), moduleName: order.module || '未归模块' }))
       .sort((left, right) => riskRank(left.risk) - riskRank(right.risk) || (left.dueDate || '9999').localeCompare(right.dueDate || '9999'))
     return { stage, items, count: items.length }
   })
 }
 
 /** 全部需要盯的条目，统一成一条，便于「风险中心」与「今天做什么」。 */
+/**
+ * 全部需要盯的条目，统一成一条，便于「风险中心」与「今天做什么」。
+ *
+ * 每条带一个 `sourceName` 表示**归属**：项目与计划归项目，工单归模块。
+ * `projectId` 只在真的挂了项目时才给（工单没有）。
+ */
 export function riskItems(projects, orders, plans, today = todayISO()) {
   const projectName = new Map(projects.map((project) => [project.id, project.name]))
   const items = []
-  for (const project of decorateProjects(projects, orders, plans, today)) {
+  for (const project of decorateProjects(projects, plans, today)) {
     if (!project.attention) continue
     items.push({
       kind: 'project',
@@ -313,7 +323,7 @@ export function riskItems(projects, orders, plans, today = todayISO()) {
       risk: project.risk,
       tone: riskTone(project.risk),
       projectId: project.id,
-      projectName: project.name
+      sourceName: project.name
     })
   }
   for (const order of orders) {
@@ -328,8 +338,8 @@ export function riskItems(projects, orders, plans, today = todayISO()) {
       dueDate: order.dueDate,
       risk,
       tone: riskTone(risk),
-      projectId: order.projectId,
-      projectName: projectName.get(order.projectId) || '未归项目'
+      projectId: '',
+      sourceName: order.module || '未归模块'
     })
   }
   for (const plan of plans) {
@@ -345,49 +355,16 @@ export function riskItems(projects, orders, plans, today = todayISO()) {
       risk,
       tone: riskTone(risk),
       projectId: plan.projectId,
-      projectName: projectName.get(plan.projectId) || '未归项目'
+      sourceName: projectName.get(plan.projectId) || '未归项目'
     })
   }
   return items.sort((left, right) => riskRank(left.risk) - riskRank(right.risk) || (left.dueDate || '9999').localeCompare(right.dueDate || '9999'))
 }
 
-/** 日历：把工单与计划落进日期格。 */
-export function calendarItems(projects, orders, plans, today = todayISO()) {
-  const projectName = new Map(projects.map((project) => [project.id, project.name]))
-  const bucket = new Map()
-  const push = (date, item) => {
-    if (!date) return
-    if (!bucket.has(date)) bucket.set(date, [])
-    bucket.get(date).push(item)
-  }
-  for (const project of projects) {
-    if (isProjectDone(project) || !project.dueDate) continue
-    const risk = projectRisk(project, orders, plans, today)
-    push(project.dueDate, {
-      kind: 'project', id: project.id, date: project.dueDate, title: `项目截止：${project.name}`,
-      risk, tone: riskTone(risk), projectId: project.id, projectName: project.name, owner: project.owner
-    })
-  }
-  for (const order of orders) {
-    if (isOrderDone(order) || !order.dueDate) continue
-    const risk = orderRisk(order, today)
-    push(order.dueDate, {
-      kind: 'order', id: order.id, date: order.dueDate, title: order.title,
-      risk, tone: riskTone(risk), projectId: order.projectId, projectName: projectName.get(order.projectId) || '未归项目', owner: order.owner
-    })
-  }
-  for (const plan of plans) {
-    if (isPlanDone(plan) || !plan.dueDate) continue
-    const risk = planRisk(plan, today)
-    push(plan.dueDate, {
-      kind: 'plan', id: plan.id, date: plan.dueDate, title: plan.title,
-      risk, tone: riskTone(risk), projectId: plan.projectId, projectName: projectName.get(plan.projectId) || '未归项目', owner: plan.owner
-    })
-  }
-  return bucket
-}
-
-/** 甘特：每个项目一行，工单/计划作为子条。 */
+/**
+ * 甘特：项目一行（子条是它的计划），工单各自成行——工单改挂模块后不再挂在项目下面。
+ * `sourceName` 同样是归属名（工单→模块，项目/计划→项目），`projectId` 只在有项目时给。
+ */
 export function timelineModel(projects, orders, plans, today = todayISO()) {
   const projectName = new Map(projects.map((project) => [project.id, project.name]))
   const useOrders = orders
@@ -395,10 +372,10 @@ export function timelineModel(projects, orders, plans, today = todayISO()) {
       kind: 'order',
       id: order.id,
       title: order.title,
-      projectId: order.projectId,
-      projectName: projectName.get(order.projectId) || '未归项目',
-      startedOn: order.createdAt ? order.createdAt.slice(0, 10) : today,
-      dueDate: order.dueDate || order.createdAt?.slice(0, 10) || '',
+      projectId: '',
+      sourceName: order.module || '未归模块',
+      startedOn: order.createdOn || (order.createdAt ? order.createdAt.slice(0, 10) : today),
+      dueDate: order.dueDate || order.createdOn || (order.createdAt?.slice(0, 10) || ''),
       risk: orderRisk(order, today)
     }))
     .filter((item) => item.dueDate)
@@ -408,7 +385,7 @@ export function timelineModel(projects, orders, plans, today = todayISO()) {
       id: plan.id,
       title: plan.title,
       projectId: plan.projectId,
-      projectName: projectName.get(plan.projectId) || '未归项目',
+      sourceName: projectName.get(plan.projectId) || '未归项目',
       startedOn: plan.startedOn || (plan.createdAt ? plan.createdAt.slice(0, 10) : today),
       dueDate: plan.dueDate || plan.startedOn || '',
       risk: planRisk(plan, today)
@@ -423,11 +400,11 @@ export function timelineModel(projects, orders, plans, today = todayISO()) {
       id: project.id,
       title: project.name,
       projectId: project.id,
-      projectName: project.name,
+      sourceName: project.name,
       startedOn: project.startedOn || project.dueDate,
       dueDate: project.dueDate || project.startedOn,
-      risk: projectRisk(project, orders, plans, today),
-      children: [...useOrders, ...usePlans].filter((item) => item.projectId === project.id)
+      risk: projectRisk(project, plans, today),
+      children: usePlans.filter((item) => item.projectId === project.id)
     })
   }
   const all = [...rows, ...useOrders, ...usePlans]

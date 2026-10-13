@@ -406,6 +406,18 @@ export const styles = `
 }
 
 .pmplan-btn:hover { background: var(--pm-bg-sunken); }
+/* 卡片内的标题按钮：允许换行，占满卡片宽度（看板标题超长时不再顶出卡片）。 */
+.pmplan-btn-block {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.pmplan-btn-block:hover { background: transparent; text-decoration: underline; }
 .pmplan-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .pmplan-btn[data-variant="primary"] { background: var(--pm-accent); border-color: var(--pm-accent); color: #fff; }
 .pmplan-btn[data-variant="primary"]:hover { filter: brightness(1.06); background: var(--pm-accent); }
@@ -468,13 +480,12 @@ export const styles = `
 
 /* ---------- 看板 ---------- */
 
+/* 阶段列按行平铺、放不下就换行，不再横向滚动（阶段多的时候也整页可见）。 */
 .pmplan-board {
   display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(230px, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  align-items: start;
   gap: 10px;
-  overflow-x: auto;
-  padding-bottom: 4px;
   min-width: 0;
 }
 

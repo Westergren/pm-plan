@@ -19,6 +19,11 @@ import { addDays, endOfWeek, formatDate, monthKey, quarterKey, startOfWeek, toda
 
 const KIND_LABEL = { project: '项目', order: '工单', plan: '计划' }
 
+/** 同名字段在不同对象上叫法不同：项目与工单的 dueDate 是「投产日期」，计划的仍是「截止日期」。 */
+function dueLabel(kind) {
+  return kind === 'plan' ? '截止' : '投产'
+}
+
 function line(...parts) {
   return parts.filter((part) => part !== undefined && part !== null && part !== '').join('')
 }
@@ -62,7 +67,7 @@ export function weeklyReport(projects, orders, plans, today = todayISO(), option
   const to = options.to || endOfWeek(today)
   const stats = periodStats(projects, orders, plans, from, to, today)
   const data = kpis(projects, orders, plans, today)
-  const decorated = decorateProjects(projects, orders, plans, today)
+  const decorated = decorateProjects(projects, plans, today)
   const risks = riskItems(projects, orders, plans, today)
   const overdue = risks.filter((item) => item.risk === '已逾期')
   const blocked = decorated.filter((project) => project.risk === '阻塞')
@@ -104,16 +109,16 @@ export function weeklyReport(projects, orders, plans, today = todayISO(), option
   if (!overdue.length && !attention.length) {
     lines.push('- 无逾期与高风险项\n')
   } else {
-    lines.push(bullet(overdue, (item) => `**已逾期** ${KIND_LABEL[item.kind]}：${item.title}（${item.projectName}｜截止 ${formatDate(item.dueDate)}）`, 10))
-    lines.push(bullet(attention, (item) => `${riskBadge(item.risk)}${KIND_LABEL[item.kind]}：${item.title}（${item.projectName}｜截止 ${formatDate(item.dueDate)}）`, 10))
-    // riskItems 的条目已经带 title/projectName，直接展开即可
+    lines.push(bullet(overdue, (item) => `**已逾期** ${KIND_LABEL[item.kind]}：${item.title}（${item.sourceName}｜${dueLabel(item.kind)} ${formatDate(item.dueDate)}）`, 10))
+    lines.push(bullet(attention, (item) => `${riskBadge(item.risk)}${KIND_LABEL[item.kind]}：${item.title}（${item.sourceName}｜${dueLabel(item.kind)} ${formatDate(item.dueDate)}）`, 10))
+    // riskItems 的条目已经带 title/sourceName（项目与计划归项目，工单归模块），直接展开即可
   }
 
   lines.push('## 五、下周计划\n')
   const nextFrom = addDays(to, 1)
   const weekEndNext = endOfWeek(nextFrom)
   const next = riskItems(projects, orders, plans, today).filter((item) => item.dueDate && item.dueDate >= nextFrom && item.dueDate <= weekEndNext).map((item) => ({ ...item }))
-  lines.push(bullet(next, (item) => `${KIND_LABEL[item.kind]}：${item.title}（${item.projectName}｜截止 ${formatDate(item.dueDate)}）`, 12))
+  lines.push(bullet(next, (item) => `${KIND_LABEL[item.kind]}：${item.title}（${item.sourceName}｜${dueLabel(item.kind)} ${formatDate(item.dueDate)}）`, 12))
 
   lines.push('## 六、需要支持\n')
   if (blocked.length) {
@@ -175,33 +180,24 @@ export function quarterlyReport(projects, orders, plans, today = todayISO(), opt
 
   lines.push('## 六、遗留问题与下季度重点\n')
   const risks = riskItems(projects, orders, plans, today).slice(0, 12)
-  lines.push(bullet(risks, (item) => `${riskBadge(item.risk)}${KIND_LABEL[item.kind]}：${item.title}（${item.projectName}｜截止 ${formatDate(item.dueDate)}）`, 12))
+  lines.push(bullet(risks, (item) => `${riskBadge(item.risk)}${KIND_LABEL[item.kind]}：${item.title}（${item.sourceName}｜${dueLabel(item.kind)} ${formatDate(item.dueDate)}）`, 12))
   return lines.join('\n')
 }
 
 /** 单项目状态汇报。 */
-export function projectReport(project, orders, plans, logs, today = todayISO()) {
-  const relatedOrders = orders.filter((order) => order.projectId === project.id)
+export function projectReport(project, plans, logs, today = todayISO()) {
   const relatedPlans = plans.filter((plan) => plan.projectId === project.id)
-  const relatedLogs = logs.filter((log) => (log.refType === 'project' && log.refId === project.id) || (log.refType === 'order' && relatedOrders.some((order) => order.id === log.refId)) || (log.refType === 'plan' && relatedPlans.some((plan) => plan.id === log.refId)))
-  const risk = projectRisk(project, orders, plans, today)
+  const relatedLogs = logs.filter((log) => (log.refType === 'project' && log.refId === project.id) || (log.refType === 'plan' && relatedPlans.some((plan) => plan.id === log.refId)))
+  const risk = projectRisk(project, plans, today)
   const lines = []
   lines.push(`# ${project.name} · 状态汇报\n`)
-  lines.push(`汇报时间：${today}｜模块：${project.module || '未分类'}｜端：${project.platform}\n`)
+  lines.push(`汇报时间：${today}${project.code ? `｜项目编号：${project.code}` : ''}｜模块：${project.module || '未分类'}｜端：${project.platform}\n`)
   lines.push('## 基本信息\n')
   lines.push(`- 状态：${project.status}｜进度：${project.progress}%｜风险：${risk}`)
-  lines.push(`- 负责人：${project.owner}｜起止：${formatDate(project.startedOn, '未填')} ~ ${formatDate(project.dueDate, '未填')}`)
+  lines.push(`- 负责人：${project.owner}｜开始：${formatDate(project.startedOn, '未填')}｜投产：${formatDate(project.dueDate, '未填')}`)
   if (project.link) lines.push(`- 链接：${project.link}`)
   if (project.summary) lines.push(`- 说明：${project.summary}`)
   lines.push('')
-  lines.push('## 需求与变更工单\n')
-  lines.push(
-    bullet(
-      relatedOrders.sort((left, right) => riskRank(orderRisk(left, today)) - riskRank(orderRisk(right, today))),
-      (order) => `${order.title}（${order.kind}｜${order.priority}｜${order.stage}｜截止 ${formatDate(order.dueDate)}）${riskBadge(orderRisk(order, today))}`,
-      20
-    )
-  )
   lines.push('## 工作计划与跟进\n')
   lines.push(
     bullet(
@@ -228,7 +224,7 @@ export function buildReport(kind, data, context = {}) {
   if (kind === 'project') {
     const project = data.projects.find((item) => item.id === context.projectId) || data.projects[0]
     if (!project) return '# 没有可汇报的项目\n'
-    return projectReport(project, data.orders, data.plans, data.logs || [], today)
+    return projectReport(project, data.plans, data.logs || [], today)
   }
   return weeklyReport(data.projects, data.orders, data.plans, today, context)
 }

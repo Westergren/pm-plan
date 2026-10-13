@@ -34,8 +34,8 @@ const project = (patch) => ({
 })
 
 const order = (patch) => ({
-  id: 'o1', projectId: 'p1', title: '限额调整', kind: '迭代需求', priority: '中', stage: '开发中',
-  owner: '我', target: '', estDays: 3, dueDate: addDays(today, 5), description: '', createdAt: new Date().toISOString(), updatedAt: '',
+  id: 'o1', code: '', module: '移动端开发', title: '限额调整', kind: '迭代需求', priority: '中', stage: '开发中',
+  owner: '我', target: '', dueDate: addDays(today, 5), createdOn: '', description: '', createdAt: new Date().toISOString(), updatedAt: '',
   ...patch
 })
 
@@ -82,35 +82,37 @@ test('planRisk：完成态、未开始且未到开始日、逾期、进度落后
   assert.equal(planRisk(plan({ dueDate: '' }), today), '未排期')
 })
 
-test('projectRisk 取项目自身与子项里最严重的一档', () => {
+test('projectRisk 取项目自身与子计划里最严重的一档', () => {
   const healthy = project({ progress: 60 })
-  assert.equal(projectRisk(healthy, [], [], today), '正常')
+  assert.equal(projectRisk(healthy, [], today), '正常')
   const blocked = project({ status: '阻塞' })
-  assert.equal(projectRisk(blocked, [], [], today), '阻塞')
-  assert.equal(projectRisk(project({ status: '已完成' }), [], [], today), '已完成')
-  assert.equal(projectRisk(project({ dueDate: addDays(today, -2) }), [], [], today), '已逾期')
-  // 子工单逾期，项目也要标成已逾期
-  assert.equal(projectRisk(healthy, [order({ dueDate: '' })], [], today), '未排期')
-  assert.equal(projectRisk(healthy, [order({ dueDate: '' })], [/* 无计划 */], today), '未排期')
-  assert.equal(projectRisk(healthy, [order({ dueDate: addDays(today, -1) })], [], today), '已逾期')
-  // 未完成子项全部正常时，项目本身正常
-  assert.equal(projectRisk(healthy, [order({ dueDate: addDays(today, 9), stage: '开发中' })], [plan({ dueDate: addDays(today, 20), progress: 80 })], today), '正常')
+  assert.equal(projectRisk(blocked, [], today), '阻塞')
+  assert.equal(projectRisk(project({ status: '已完成' }), [], today), '已完成')
+  assert.equal(projectRisk(project({ dueDate: addDays(today, -2) }), [], today), '已逾期')
+  // 工单挂模块、不归项目，所以逾期工单不再影响项目风险；子计划仍然影响
+  assert.equal(projectRisk(healthy, [plan({ dueDate: '' })], today), '未排期')
+  assert.equal(projectRisk(healthy, [plan({ dueDate: addDays(today, -1) })], today), '已逾期')
+  assert.equal(projectRisk(healthy, [plan({ dueDate: addDays(today, 20), progress: 80 })], today), '正常')
+  // 别人的计划不算在自己头上
+  assert.equal(projectRisk(healthy, [plan({ projectId: 'p9', dueDate: addDays(today, -1) })], today), '正常')
   // 没有排期的项目
-  assert.equal(projectRisk(project({ startedOn: '', dueDate: '' }), [], [], today), '未排期')
+  assert.equal(projectRisk(project({ startedOn: '', dueDate: '' }), [], today), '未排期')
 })
 
-test('decorateProjects 汇总子项计数与需关注标记', () => {
+test('decorateProjects 汇总子计划计数与需关注标记', () => {
   const projects = [project({})]
-  const orders = [order({ id: 'o1' }), order({ id: 'o2', dueDate: addDays(today, -1) }), order({ id: 'o3', stage: '已上线' })]
-  const plans = [plan({ id: 'n1' }), plan({ id: 'n2', status: '已完成' })]
-  const [decorated] = decorateProjects(projects, orders, plans, today)
-  assert.equal(decorated.orderTotal, 3)
-  assert.equal(decorated.orderOpen, 2)
-  assert.equal(decorated.orderOverdue, 1)
+  const plans = [plan({ id: 'n1', dueDate: addDays(today, 30) }), plan({ id: 'n2', status: '已完成' }), plan({ id: 'n3', projectId: 'p2' })]
+  const [decorated] = decorateProjects(projects, plans, today)
+  assert.equal(decorated.planTotal, 2)
   assert.equal(decorated.planOpen, 1)
-  assert.equal(decorated.risk, '已逾期')
-  assert.equal(decorated.attention, true)
+  assert.equal(decorated.planOverdue, 0)
+  assert.equal(decorated.risk, '正常')
+  assert.equal(decorated.attention, false)
   assert.equal(decorated.daysLeft, 10)
+  // 子计划逾期会把项目一起拉进需关注
+  const [worried] = decorateProjects(projects, [plan({ id: 'n4', dueDate: addDays(today, -1) })], today)
+  assert.equal(worried.risk, '已逾期')
+  assert.equal(worried.attention, true)
 })
 
 test('kpis 与 riskBreakdown 覆盖全部口径', () => {
@@ -141,8 +143,8 @@ test('riskItems / todayBuckets 把工单、计划、项目统一成可排序条�
   assert.ok(items.some((item) => item.kind === 'order' && item.risk === '已逾期'))
   assert.ok(items.some((item) => item.kind === 'plan'))
   const buckets = todayBuckets(projects, orders, plans, today)
-  // 项目 p1 因为挂了逾期工单，本身也判定为已逾期，所以逾期桶是 2 条
-  assert.equal(buckets.overdue.length, 2)
+  // 工单不再挂项目，项目 p1 自身投产日期还早，所以逾期桶只有工单那一条
+  assert.equal(buckets.overdue.length, 1)
   assert.ok(buckets.dueToday.length >= 1)
   assert.equal(needsAttention('临近'), false)
   assert.equal(needsAttention('进度风险'), true)
