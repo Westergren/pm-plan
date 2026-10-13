@@ -48,15 +48,104 @@ function openItem(item, handlers) {
   else handlers.onOpenPlan(item.id)
 }
 
+/* ---------------- 页内筛查条 ---------------- */
+
+/** 智能视图的一句话说明：鼠标悬停能看懂「这个视图到底筛什么」。 */
+const SMART_HINTS = {
+  all: '未结束的项目',
+  attention: '逾期 / 阻塞 / 进度风险',
+  overdue: '已过截止日期',
+  week: '本周内到期',
+  unscheduled: '缺开始或截止日期',
+  done: '已完成、已归档'
+}
+
+function ChipRow({ label, children }) {
+  return h('div', { className: 'pmplan-filter-row' },
+    h('span', { className: 'pmplan-filter-label' }, label),
+    h('div', { className: 'pmplan-chips' }, children)
+  )
+}
+
+/**
+ * 页内筛查条。这些筛选以前挂在左侧栏、对所有页面生效；现在下沉到页面自己身上，
+ * 每页只显示与自己有关的维度——项目页看「模块 + 端」，工单页看「模块 + 目标端」。
+ * 筛选状态由面板按页持有，所以来回切页签不会互相冲掉。
+ */
+function FilterBar({ counts, scope, setScope, dims }) {
+  const dirty = dims.some((dim) => scope[dim.key]) || Boolean(counts && scope.smart !== 'all')
+  const reset = () => setScope((current) => {
+    const next = { ...current }
+    if (counts) next.smart = 'all'
+    for (const dim of dims) next[dim.key] = ''
+    return next
+  })
+
+  const chip = (key, label, active, onClick, extra) => h('button', {
+    key,
+    type: 'button',
+    className: 'pmplan-chip',
+    'aria-pressed': active ? 'true' : 'false',
+    onClick
+  }, h('span', null, label), extra || null)
+
+  return h('div', { className: 'pmplan-filters' },
+    counts
+      ? h(ChipRow, { label: '智能视图' },
+          counts.map((row) => chip(
+            row.id,
+            row.label,
+            scope.smart === row.id,
+            () => setScope((current) => ({ ...current, smart: row.id })),
+            h('span', { className: 'pmplan-chip-count', title: SMART_HINTS[row.id] || '' }, String(row.count))
+          ))
+        )
+      : null,
+    dims.map((dim) => h(ChipRow, { key: dim.key, label: dim.label },
+      chip(`${dim.key}-all`, dim.emptyLabel || '全部', !scope[dim.key], () => setScope((current) => ({ ...current, [dim.key]: '' }))),
+      dim.names.map((name) => chip(
+        name,
+        name,
+        scope[dim.key] === name,
+        () => setScope((current) => ({ ...current, [dim.key]: current[dim.key] === name ? '' : name }))
+      ))
+    )),
+    dirty
+      ? h('div', { className: 'pmplan-filter-row' },
+          h('span', { className: 'pmplan-filter-label' }, ' '),
+          h(Button, { size: 'small', variant: 'ghost', onClick: reset }, '清除筛选')
+        )
+      : null
+  )
+}
+
+/** 概览页的智能视图统计卡：每个数字都能点，点开就是项目页对应的智能视图。 */
+function SmartCards({ counts, onOpenSmart }) {
+  return h('div', { className: 'pmplan-smart' },
+    counts.map((row) => h('button', {
+      key: row.id,
+      type: 'button',
+      className: 'pmplan-smart-card',
+      'data-tone': row.id === 'attention' || row.id === 'overdue' ? 'warn' : 'info',
+      title: `${SMART_HINTS[row.id] || ''} · 点开看项目`,
+      onClick: () => onOpenSmart(row.id)
+    },
+      h('span', { className: 'pmplan-smart-value' }, String(row.count)),
+      h('span', { className: 'pmplan-smart-label' }, row.label),
+      h('span', { className: 'pmplan-smart-hint' }, SMART_HINTS[row.id] || '')
+    ))
+  )
+}
+
 /* ---------------- 概览 ---------------- */
 
 export function OverviewScreen(props) {
-  const { projects, orders, plans, scoped, stats, summaryLine, today, onOpenProject, onOpenOrder, onOpenPlan, onSetView } = props
+  const { projects, orders, plans, scoped, stats, summaryLine, today, onOpenProject, onOpenOrder, onOpenPlan, onSetView, counts, scope, setScope, onOpenSmart, moduleNames, platformNames } = props
   const [question, setQuestion] = useState('')
   const [answer, setAnswer] = useState('')
   const breakdown = riskBreakdown(scoped.projects, scoped.orders, scoped.plans, today)
-  const modules = groupByModule(scoped.projects, scoped.orders, scoped.plans, today)
-  const platforms = platformLoad(scoped.projects, scoped.orders, today)
+  const modules = groupByModule(scoped.projects, scoped.orders, scoped.plans, today, moduleNames)
+  const platforms = platformLoad(scoped.projects, scoped.orders, today, platformNames)
   const owners = ownerWorkload(scoped.projects, scoped.orders, scoped.plans, today)
   const board = weekBoard(scoped.orders, scoped.plans, scoped.projects, today)
   const buckets = todayBuckets(scoped.projects, scoped.orders, scoped.plans, today)
@@ -96,6 +185,17 @@ export function OverviewScreen(props) {
   )
 
   return [
+    h(SmartCards, { key: 'smart', counts, onOpenSmart }),
+    h(FilterBar, {
+      key: 'filters',
+      counts: null,
+      scope,
+      setScope,
+      dims: [
+        { key: 'moduleId', label: '模块', names: moduleNames },
+        { key: 'platform', label: '端', names: platformNames }
+      ]
+    }),
     h('div', { className: 'pmplan-kpis', key: 'kpis' },
       h(Kpi, { key: 'a', label: '在管项目', value: stats.active, hint: `共 ${stats.projects} 个` }),
       h(Kpi, { key: 'b', label: '需关注', value: stats.attention, hint: `逾期 ${stats.overdue}`, tone: stats.attention ? 'danger' : undefined }),
@@ -234,18 +334,28 @@ export function OverviewScreen(props) {
 /* ---------------- 项目 ---------------- */
 
 export function ProjectsScreen(props) {
-  const { scoped, orders, plans, today, onOpenProject, onOpenOrder, onOpenPlan, onEditProject, onDelete, smart } = props
+  const { scoped, orders, plans, today, onOpenProject, onOpenOrder, onOpenPlan, onEditProject, onDelete, scope, setScope, counts, moduleNames, platformNames } = props
   const [grouping, setGrouping] = useState('module')
   const [expanded, setExpanded] = useState('')
   const groups = grouping === 'platform'
-    ? groupByPlatform(scoped.projects, scoped.orders, scoped.plans, today)
+    ? groupByPlatform(scoped.projects, scoped.orders, scoped.plans, today, platformNames)
     : statusColumns(scoped.projects, scoped.orders, scoped.plans, today).length && grouping === 'status'
       ? statusColumns(scoped.projects, scoped.orders, scoped.plans, today).map((column) => ({ module: column.status, items: column.items, count: column.count }))
-      : groupByModule(scoped.projects, scoped.orders, scoped.plans, today)
+      : groupByModule(scoped.projects, scoped.orders, scoped.plans, today, moduleNames)
 
   const visible = groups.filter((group) => group.count)
 
   return [
+    h(FilterBar, {
+      key: 'filters',
+      counts,
+      scope,
+      setScope,
+      dims: [
+        { key: 'moduleId', label: '模块', names: moduleNames },
+        { key: 'platform', label: '端', names: platformNames }
+      ]
+    }),
     h('div', { className: 'pmplan-row', key: 'head' },
       h('span', { className: 'pmplan-section-title' }, `项目 ${scoped.projects.length} 个`),
       h('span', { className: 'pmplan-spacer' }),
@@ -263,7 +373,7 @@ export function ProjectsScreen(props) {
     scoped.projects.length === 0
       ? h(Empty, {
           key: 'empty',
-          text: smart === 'all' ? '当前筛选下没有项目。' : '该视图下没有项目。',
+          text: scope.smart === 'all' ? '当前筛选下没有项目。' : '该视图下没有项目。',
           action: h(Button, { variant: 'primary', onClick: () => onEditProject(null) }, '新建项目')
         })
       : visible.map((group) => {
@@ -344,13 +454,23 @@ export function ProjectsScreen(props) {
 /* ---------------- 工单 ---------------- */
 
 export function OrdersScreen(props) {
-  const { scoped, projects, today, onOpenOrder, onEditOrder, onDelete } = props
+  const { scoped, projects, today, onOpenOrder, onEditOrder, onDelete, scope, setScope, counts, moduleNames, targetNames } = props
   const [mode, setMode] = useState('table')
   const [sortMode, setSortMode] = useState('risk')
   const rows = sortOrders(scoped.orders, projects, today, sortMode)
   const columns = orderBoardColumns(scoped.orders, projects, today)
 
   return [
+    h(FilterBar, {
+      key: 'filters',
+      counts,
+      scope,
+      setScope,
+      dims: [
+        { key: 'moduleId', label: '模块', names: moduleNames },
+        { key: 'target', label: '目标端', names: targetNames, emptyLabel: '全部端' }
+      ]
+    }),
     h('div', { className: 'pmplan-row', key: 'head' },
       h('span', { className: 'pmplan-section-title' }, `工单 ${rows.length} 条`),
       h('span', { className: 'pmplan-spacer' }),

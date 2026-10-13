@@ -97,18 +97,6 @@ export const styles = `
   min-width: 0;
 }
 
-.pmplan-side {
-  width: 216px;
-  flex: 0 0 216px;
-  border-right: 1px solid var(--pm-border);
-  background: var(--pm-bg-soft);
-  padding: 10px 8px;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
 .pmplan-main {
   flex: 1 1 auto;
   min-width: 0;
@@ -162,73 +150,122 @@ export const styles = `
   gap: var(--pm-gap);
 }
 
-/* ---------- 侧栏分组 ---------- */
+/* ---------- 页内筛查条 ---------- */
 
-.pmplan-side-group { display: flex; flex-direction: column; gap: 2px; }
-
-.pmplan-side-title {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--pm-fg-muted);
-  padding: 4px 8px 2px;
-  text-transform: uppercase;
+.pmplan-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--pm-border);
+  border-radius: var(--pm-radius);
+  background: var(--pm-bg-soft);
 }
 
-.pmplan-side-item {
+.pmplan-filter-row { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+
+.pmplan-filter-label {
+  flex: 0 0 auto;
+  width: 56px;
+  padding-top: 4px;
+  font-size: 11px;
+  color: var(--pm-fg-muted);
+  letter-spacing: 0.04em;
+}
+
+.pmplan-chips { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+
+.pmplan-chip {
   appearance: none;
-  border: none;
-  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  border: 1px solid var(--pm-border);
+  background: var(--pm-bg);
   color: var(--pm-fg-soft);
   font: inherit;
-  text-align: left;
-  padding: 6px 8px;
-  border-radius: var(--pm-radius-s);
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
 }
 
-.pmplan-side-item:hover { background: var(--pm-bg-sunken); }
+.pmplan-chip:hover { background: var(--pm-bg-sunken); }
 
-.pmplan-side-item[aria-current="true"] {
+.pmplan-chip[aria-pressed="true"] {
+  border-color: var(--pm-accent);
   background: var(--pm-accent-soft);
   color: var(--pm-fg);
   font-weight: 600;
 }
 
-.pmplan-side-item-label {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pmplan-side-count {
-  flex: 0 0 auto;
+.pmplan-chip-count {
   font-size: 11px;
   color: var(--pm-fg-muted);
   font-variant-numeric: tabular-nums;
 }
 
-.pmplan-side-risk {
-  flex: 0 0 auto;
-  font-size: 11px;
-  color: var(--pm-danger);
-  font-variant-numeric: tabular-nums;
+.pmplan-chip[aria-pressed="true"] .pmplan-chip-count { color: inherit; }
+
+/* ---------- 概览的智能视图卡 ---------- */
+
+.pmplan-smart {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
+  gap: 8px;
 }
 
-.pmplan-side-foot {
-  margin-top: auto;
+.pmplan-smart-card {
+  appearance: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 6px 4px 2px;
-  border-top: 1px solid var(--pm-border);
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--pm-border);
+  border-left: 3px solid var(--pm-accent);
+  border-radius: var(--pm-radius);
+  background: var(--pm-bg-soft);
+  color: var(--pm-fg);
 }
+
+.pmplan-smart-card:hover { background: var(--pm-bg-sunken); }
+.pmplan-smart-card[data-tone="warn"] { border-left-color: var(--pm-danger); }
+.pmplan-smart-value { font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.25; }
+.pmplan-smart-label { font-size: 12px; }
+.pmplan-smart-hint { font-size: 11px; color: var(--pm-fg-muted); }
+
+/* ---------- 设置弹窗 ---------- */
+
+.pmplan-settings { display: flex; flex-direction: column; gap: 14px; }
+
+.pmplan-dim {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--pm-border);
+  border-radius: var(--pm-radius);
+  padding: 10px 11px;
+  background: var(--pm-bg-soft);
+}
+
+.pmplan-dim-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pmplan-dim-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pmplan-dim-row .pmplan-input { flex: 1 1 auto; min-width: 0; }
+.pmplan-dim-index { flex: 0 0 auto; width: 16px; font-size: 11px; color: var(--pm-fg-muted); font-variant-numeric: tabular-nums; }
+.pmplan-dim-usage { flex: 0 0 auto; font-size: 11px; color: var(--pm-fg-muted); font-variant-numeric: tabular-nums; }
+.pmplan-settings-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* ---------- 通用块 ---------- */
 
@@ -776,7 +813,7 @@ export const styles = `
 /* ---------- 窄容器适配（按业务容器宽度，不是视口） ---------- */
 
 @container pmplan (max-width: 1080px) {
-  .pmplan-side { width: 186px; flex-basis: 186px; }
+  .pmplan-filter-label { width: 48px; }
   .pmplan-timeline-row,
   .pmplan-timeline-scale { grid-template-columns: minmax(110px, 150px) 1fr; }
   .pmplan-calendar-grid { grid-template-columns: repeat(7, minmax(72px, 1fr)); }
@@ -784,22 +821,9 @@ export const styles = `
 
 @container pmplan (max-width: 900px) {
   .pmplan-body { flex-direction: column; }
-  .pmplan-side {
-    width: auto;
-    flex: 0 0 auto;
-    border-right: none;
-    border-bottom: 1px solid var(--pm-border);
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    padding: 8px;
-    max-height: 34%;
-  }
-  .pmplan-side-group { flex-direction: row; flex-wrap: wrap; align-items: center; }
-  .pmplan-side-title { padding: 0 4px; }
-  .pmplan-side-foot { margin: 0; border-top: none; padding: 0; }
-  .pmplan-side-item { width: auto; padding: 4px 8px; }
+  .pmplan-filter-row { flex-direction: column; gap: 4px; }
+  .pmplan-filter-label { width: auto; padding-top: 0; }
+  .pmplan-smart { grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); }
   .pmplan-calendar-grid { grid-template-columns: repeat(7, minmax(58px, 1fr)); }
   .pmplan-day { min-height: 62px; }
   .pmplan-chat { width: 100%; min-width: 0; }
@@ -809,6 +833,8 @@ export const styles = `
 
 @container pmplan (max-width: 620px) {
   .pmplan-kpis { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+  .pmplan-smart { grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); }
+  .pmplan-smart-value { font-size: 18px; }
   .pmplan-content { padding: 8px; }
   .pmplan-calendar-grid { grid-template-columns: repeat(7, minmax(44px, 1fr)); }
   .pmplan-day { min-height: 54px; padding: 3px; }

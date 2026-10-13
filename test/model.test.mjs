@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 
 import {
-  MODULES,
+  DEFAULT_MODULES,
+  DEFAULT_PLATFORMS,
   ORDER_STAGES,
   createId,
   emptyState,
@@ -26,6 +27,18 @@ test('normalizeState 在空输入下给出可用的空结构', () => {
   assert.deepEqual(state.orders, [])
   assert.deepEqual(state.plans, [])
   assert.deepEqual(state.logs, [])
+  assert.deepEqual(state.config.modules, DEFAULT_MODULES)
+  assert.deepEqual(state.config.platforms, DEFAULT_PLATFORMS)
+})
+
+test('config 来自数据、可自定义，并能清洗非法项', () => {
+  const custom = normalizeState({ config: { modules: ['甲', '乙', '甲', '  ', 3, '丙'], platforms: '不是数组' } })
+  assert.deepEqual(custom.config.modules, ['甲', '乙', '丙'])
+  assert.deepEqual(custom.config.platforms, DEFAULT_PLATFORMS, '配置坏了要回落到默认值')
+
+  const blank = normalizeState({ config: { modules: [], platforms: ['  '] } })
+  assert.deepEqual(blank.config.modules, DEFAULT_MODULES)
+  assert.deepEqual(blank.config.platforms, DEFAULT_PLATFORMS)
 })
 
 test('normalizeState 丢弃脏数据、补默认值、统一枚举', () => {
@@ -53,7 +66,8 @@ test('normalizeState 丢弃脏数据、补默认值、统一枚举', () => {
   })
 
   assert.equal(state.projects.length, 2)
-  assert.equal(state.projects[0].platform, '其他')
+  // 端与模块都是可配置的自由文本：不认识的历史取值原样保留，不再被强改成「其他」
+  assert.equal(state.projects[0].platform, '不存在的端')
   assert.equal(state.projects[0].status, '进行中')
   assert.equal(state.projects[0].progress, 100)
   assert.deepEqual(state.projects[0].tags, ['示例', '后端'])
@@ -92,7 +106,7 @@ test('emptyState / nextStage / suggestedProgress', () => {
   assert.equal(nextStage('开发中'), '联调中')
   assert.equal(nextStage('已上线'), '')
   assert.equal(nextStage('不存在'), '')
-  assert.ok(MODULES.includes('移动端开发'))
+  assert.ok(DEFAULT_MODULES.includes('移动端开发'))
   assert.equal(ORDER_STAGES.length, 8)
 
   const project = { id: 'p1', progress: 20 }

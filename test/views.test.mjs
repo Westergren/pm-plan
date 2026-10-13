@@ -2,18 +2,21 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { addDays } from '../src/shared/date.js'
+import { DEFAULT_MODULES, DEFAULT_PLATFORMS } from '../src/shared/model.js'
 import {
-  MODULES,
   SMART_VIEWS,
   applyView,
   attachProjectName,
   groupByModule,
   groupByPlatform,
-  moduleAxis,
   moduleOf,
-  smartCounts,
+  moduleOptions,
+  orderSmartCounts,
+  platformOptions,
+  projectSmartCounts,
   sortOrders,
   sortPlans,
+  targetOptions,
   weekBoard
 } from '../src/shared/views.js'
 
@@ -38,20 +41,28 @@ const plan = (patch) => ({
   ...patch
 })
 
-test('moduleOf 缺省归到第一个模块', () => {
-  assert.equal(moduleOf({}), MODULES[0])
+test('moduleOf 缺省归到配置里的第一个模块', () => {
+  assert.equal(moduleOf({}), DEFAULT_MODULES[0])
+  assert.equal(moduleOf({}, ['甲', '乙']), '甲')
   assert.equal(moduleOf({ module: '  日常工作 ' }), '日常工作')
 })
 
-test('moduleAxis 给出全部 + 固定模块 + 自定义模块，并带计数', () => {
-  const projects = [project({ id: 'p1' }), project({ id: 'p2', module: '专项攻坚', status: '阻塞' })]
-  const orders = [order({ id: 'o1', projectId: 'p1' }), order({ id: 'o2', projectId: 'p1', stage: '已上线' })]
-  const axis = moduleAxis(projects, orders, [], today)
-  assert.equal(axis[0].id, '')
-  assert.equal(axis[0].count, 2)
-  assert.equal(axis[0].openOrders, 1)
-  assert.ok(axis.some((row) => row.id === '专项攻坚' && row.count === 1))
-  assert.ok(axis.some((row) => row.id === '日常工作' && row.count === 0))
+test('moduleOptions / platformOptions / targetOptions 并入配置与历史取值', () => {
+  const projects = [project({ id: 'p1' }), project({ id: 'p2', module: '专项攻坚', platform: '平板' })]
+  const orders = [order({ id: 'o1', target: '移动手机' }), order({ id: 'o2', target: '车机' })]
+
+  const modules = moduleOptions(DEFAULT_MODULES, projects)
+  assert.equal(modules[0], DEFAULT_MODULES[0])
+  assert.ok(modules.includes('专项攻坚'), '数据里的自定义模块要出现在筛选条里')
+  assert.equal(new Set(modules).size, modules.length, '取值不重复')
+
+  const platforms = platformOptions(DEFAULT_PLATFORMS, projects)
+  assert.ok(platforms.includes('平板'), '配置里没有的端也要保留')
+  assert.equal(platforms[0], DEFAULT_PLATFORMS[0])
+
+  const targets = targetOptions(DEFAULT_PLATFORMS, orders)
+  assert.ok(targets.includes('车机'))
+  assert.ok(targets.every((name) => name.trim() === name && name))
 })
 
 test('applyView：默认排除已完成，smart 视图各自过滤', () => {
@@ -103,12 +114,38 @@ test('applyView：模块、平台与关键词筛选', () => {
   assert.equal(none.plans.length, 0)
 })
 
-test('smartCounts 覆盖全部智能视图', () => {
-  const counts = smartCounts([project({})], [order({})], [plan({})], {}, today)
-  assert.equal(counts.length, SMART_VIEWS.length)
-  assert.equal(counts[0].id, 'all')
-  assert.ok(counts[0].count >= 1)
-  assert.ok(counts.every((row) => Number.isFinite(row.count)))
+test('applyView：目标端只筛工单，不动项目与计划', () => {
+  const projects = [project({ id: 'p1' }), project({ id: 'p2' })]
+  const orders = [order({ id: 'o1', projectId: 'p1', target: '移动手机' }), order({ id: 'o2', projectId: 'p2', target: '车机' })]
+  const plans = [plan({ id: 'n1', projectId: 'p1' })]
+
+  const scoped = applyView(projects, orders, plans, { target: '车机' }, today)
+  assert.deepEqual(scoped.orders.map((item) => item.id), ['o2'])
+  assert.equal(scoped.projects.length, 2, '目标端不是项目维度')
+  assert.equal(scoped.plans.length, 1)
+})
+
+test('projectSmartCounts / orderSmartCounts 覆盖全部智能视图且口径各自独立', () => {
+  const projects = [project({ id: 'p1' }), project({ id: 'p2', status: '已完成' })]
+  const orders = [order({ id: 'o1', projectId: 'p1' }), order({ id: 'o2', projectId: 'p1', stage: '已上线' })]
+  const plans = [plan({ id: 'n1', projectId: 'p1' })]
+  const today2 = '2026-10-10'
+
+  const projects2 = projectSmartCounts(projects, orders, plans, {}, today2)
+  assert.equal(projects2.length, SMART_VIEWS.length)
+  assert.equal(projects2[0].id, 'all')
+  assert.equal(projects2[0].count, 1, '在管口径排除已完成项目')
+  assert.equal(projects2.find((row) => row.id === 'done').count, 1)
+  assert.ok(projects2.every((row) => Number.isFinite(row.count)))
+
+  const orders2 = orderSmartCounts(projects, orders, plans, {}, today2)
+  assert.equal(orders2.length, SMART_VIEWS.length)
+  assert.equal(orders2[0].count, 1, '在管口径排除已上线工单')
+  assert.equal(orders2.find((row) => row.id === 'done').count, 1)
+
+  // 模块与端筛选同样影响统计口径
+  const narrowed = projectSmartCounts(projects, orders, plans, { moduleId: '不存在的模块' }, today2)
+  assert.ok(narrowed.every((row) => row.count === 0))
 })
 
 test('groupByModule / groupByPlatform 分区且按风险排序', () => {
@@ -119,6 +156,22 @@ test('groupByModule / groupByPlatform 分区且按风险排序', () => {
   assert.equal(mobile.items[0].id, 'p2')
   const platforms = groupByPlatform(projects, [], [], today)
   assert.ok(platforms.some((group) => group.platform === '小程序'))
+})
+
+test('groupByModule / groupByPlatform 跟随配置，并保留配置外的历史取值', () => {
+  const projects = [project({ id: 'p1', module: '自研', platform: '车机' })]
+
+  // 配置里没有的取值不能被丢掉，否则改配置后旧项目会从界面上消失
+  const modules = groupByModule(projects, [], [], today, ['移动端开发'])
+  assert.deepEqual(modules.map((group) => group.module), ['自研'])
+  assert.equal(modules[0].count, 1)
+
+  const platforms = groupByPlatform(projects, [], [], today, ['移动手机'])
+  assert.deepEqual(platforms.map((group) => group.platform), ['车机'])
+
+  // 空分组不进看板：项目页本来也不该出现 0 条的模块
+  const empty = groupByModule([], [], [], today, ['移动端开发', '日常工作'])
+  assert.deepEqual(empty, [])
 })
 
 test('sortOrders / sortPlans 支持多种排序', () => {

@@ -3,8 +3,9 @@
  *
  * 数据落盘在 DSH 数据目录的 `pm-plan/state.json`，结构为：
  * {
- *   version, updatedAt,
- *   projects: [{ id, name, platform, status, owner, startedOn, dueDate, progress, link, summary, tags, createdAt, updatedAt }],
+ *   version, updatedAt, seededAt,
+ *   config:   { modules: [名称], platforms: [名称] },   // 用户可在「设置」里增删改，缺字段时回落到 DEFAULT_*
+ *   projects: [{ id, name, module, platform, status, owner, startedOn, dueDate, progress, link, summary, tags, createdAt, updatedAt }],
  *   orders:   [{ id, projectId, title, kind, priority, stage, owner, target, estDays, dueDate, description, createdAt, updatedAt }],
  *   plans:    [{ id, projectId, orderId, title, owner, status, startedOn, dueDate, progress, note, createdAt, updatedAt }],
  *   logs:     [{ id, refType, refId, at, kind, text }]
@@ -15,11 +16,18 @@ export const STATE_VERSION = 1
 
 export const PROJECT_STATUS = ['进行中', '待启动', '阻塞', '暂停', '已完成']
 
-/** 模块轴：项目归入哪个业务模块，用于左侧导航与模块看板。 */
-export const MODULES = ['公司项目', '移动端开发', '日常工作', '其他项目']
+/**
+ * 模块轴的出厂默认值。模块与端都是**用户可配置项**：真实取值随状态一起落盘在
+ * `config` 里，这两个常量只在首次生成状态、以及状态里缺字段时兜底。
+ */
+export const DEFAULT_MODULES = ['公司项目', '移动端开发', '日常工作', '其他项目']
 
-/** 多端项目：PC 与移动端分开登记，便于按端筛选。 */
-export const PLATFORMS = ['移动手机', '移动 PAD', '小程序', 'PC Web', '其他']
+/** 端的出厂默认值。 */
+export const DEFAULT_PLATFORMS = ['移动手机', '移动 PAD', '小程序', 'PC Web', '其他']
+
+/** 单个名称的长度上限、一个维度的条目数上限，防止状态文件被撑坏。 */
+export const MAX_DIMENSION_LENGTH = 40
+export const MAX_DIMENSION_ITEMS = 24
 
 export const ORDER_KINDS = ['迭代需求', '变更需求', '缺陷', '技术任务']
 
@@ -50,7 +58,16 @@ export function createId(prefix = 'id') {
 }
 
 export function emptyState(now = new Date().toISOString()) {
-  return { version: STATE_VERSION, updatedAt: now, seededAt: '', projects: [], orders: [], plans: [], logs: [] }
+  return {
+    version: STATE_VERSION,
+    updatedAt: now,
+    seededAt: '',
+    config: { modules: [...DEFAULT_MODULES], platforms: [...DEFAULT_PLATFORMS] },
+    projects: [],
+    orders: [],
+    plans: [],
+    logs: []
+  }
 }
 
 function asText(value, fallback = '') {
@@ -61,6 +78,25 @@ function asText(value, fallback = '') {
 
 function asEnum(value, allowed, fallback) {
   return allowed.includes(value) ? value : fallback
+}
+
+/**
+ * 收敛可配置维度（模块、端）：去空、去重、限长、限量；整列为空时回落到出厂默认。
+ * 与 asEnum 的关键区别是它**不做白名单校验**——用户自定义的名称一律原样保留。
+ * 非字符串项直接丢弃：配置里混进数字/对象多半是坏数据，不该被当成一个模块名。
+ */
+function asNameList(value, defaults) {
+  const seen = new Set()
+  const result = []
+  for (const item of Array.isArray(value) ? value : []) {
+    if (typeof item !== 'string') continue
+    const text = item.trim().slice(0, MAX_DIMENSION_LENGTH)
+    if (!text || seen.has(text)) continue
+    seen.add(text)
+    result.push(text)
+    if (result.length >= MAX_DIMENSION_ITEMS) break
+  }
+  return result.length ? result : [...defaults]
 }
 
 function asDate(value) {
@@ -107,6 +143,12 @@ export function normalizeState(raw, { now = new Date().toISOString() } = {}) {
   const plans = []
   const logs = []
 
+  // 可配置维度先于业务数据收敛：项目的模块/端缺省值要按它回落。
+  const config = {
+    modules: asNameList(source.config?.modules, DEFAULT_MODULES),
+    platforms: asNameList(source.config?.platforms, DEFAULT_PLATFORMS)
+  }
+
   const projectIds = new Set()
   for (const item of Array.isArray(source.projects) ? source.projects : []) {
     if (!item || typeof item !== 'object') continue
@@ -115,12 +157,13 @@ export function normalizeState(raw, { now = new Date().toISOString() } = {}) {
     const id = asText(item.id).trim() || createId('prj')
     if (projectIds.has(id)) continue
     projectIds.add(id)
-    const moduleValue = asText(item.module).trim().slice(0, 40)
+    const moduleValue = asText(item.module).trim().slice(0, MAX_DIMENSION_LENGTH)
+    const platformValue = asText(item.platform).trim().slice(0, MAX_DIMENSION_LENGTH)
     projects.push({
       id,
       name,
-      module: moduleValue || MODULES[0],
-      platform: asEnum(item.platform, PLATFORMS, '其他'),
+      module: moduleValue || config.modules[0],
+      platform: platformValue || config.platforms[0],
       status: asEnum(item.status, PROJECT_STATUS, '进行中'),
       owner: asText(item.owner).trim().slice(0, 40) || '我',
       startedOn: asDate(item.startedOn),
@@ -151,7 +194,7 @@ export function normalizeState(raw, { now = new Date().toISOString() } = {}) {
       priority: asEnum(item.priority, PRIORITIES, '中'),
       stage: asEnum(item.stage, ORDER_STAGES, '待评审'),
       owner: asText(item.owner).trim().slice(0, 40),
-      target: asEnum(item.target, [...PLATFORMS, ''], '') || '',
+      target: asText(item.target).trim().slice(0, MAX_DIMENSION_LENGTH),
       estDays: Math.max(0, Math.min(365, Math.round(Number(item.estDays) || 0))),
       dueDate: asDate(item.dueDate),
       description: asText(item.description).slice(0, 2000),
@@ -212,6 +255,7 @@ export function normalizeState(raw, { now = new Date().toISOString() } = {}) {
     version: STATE_VERSION,
     updatedAt: asStamp(source.updatedAt, now),
     seededAt: asStamp(source.seededAt, ''),
+    config,
     projects,
     orders,
     plans,

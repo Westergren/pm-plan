@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { createFakeServer, loadClient } from './helpers/client-loader.mjs'
 import { sampleState } from '../src/shared/seed.js'
 import { normalizeState } from '../src/shared/model.js'
+import { moduleOptions, orderSmartCounts, platformOptions, projectSmartCounts, targetOptions } from '../src/shared/views.js'
 
 const today = '2026-10-10'
 
@@ -36,7 +37,7 @@ test('客户端包通过模块加载器注册工作台，声明必需字段', as
 test('首屏在无会话时也能渲染业务面板骨架', async () => {
   const { registration, React } = await boot()
   const markup = renderToStaticMarkup(React.createElement(registration.Component, { service: {}, entry: {}, conversation: null }))
-  for (const label of ['项目计划工作台', '概览', '项目', '工单', '计划', '需求文档', '日历', '风险', '汇报', '新建项目', 'AI 会话', '需关注', '全部端']) {
+  for (const label of ['项目计划工作台', '概览', '项目', '工单', '计划', '文档', '日历', '风险', '汇报', '设置', '新建项目', 'AI 会话']) {
     assert.ok(markup.includes(label), `首屏缺少 ${label}`)
   }
   assert.ok(markup.includes('正在读取本机数据'), '未渲染加载态')
@@ -57,22 +58,30 @@ test('各业务页签在有数据时都能渲染出内容', async () => {
   assert.ok(screens, '需要导出 screens 供渲染自测')
   const scoped = { projects: state.projects, orders: state.orders, plans: state.plans }
   const noop = () => {}
+  const moduleNames = moduleOptions(state.config.modules, state.projects)
+  const platformNames = platformOptions(state.config.platforms, state.projects)
+  const targetNames = targetOptions(state.config.platforms, state.orders)
+  const projectCounts = projectSmartCounts(state.projects, state.orders, state.plans, {}, today)
+  const orderCounts = orderSmartCounts(state.projects, state.orders, state.plans, {}, today)
   const base = {
     today,
     projects: state.projects,
     orders: state.orders,
     plans: state.plans,
     logs: state.logs,
+    config: state.config,
     scoped,
     decorated: screens.decorateProjects(state.projects, state.orders, state.plans, today),
     stats: screens.kpis(state.projects, state.orders, state.plans, today),
     summaryLine: '测试用一句话结论',
-    moduleId: '',
-    smart: 'all',
-    platform: '',
+    moduleNames,
+    platformNames,
+    targetNames,
+    scope: { smart: 'all', moduleId: '', platform: '', target: '' },
+    setScope: noop,
+    onOpenSmart: noop,
+    counts: projectCounts,
     search: '',
-    axis: [],
-    counts: [],
     onOpenProject: noop,
     onOpenOrder: noop,
     onOpenPlan: noop,
@@ -113,9 +122,9 @@ test('各业务页签在有数据时都能渲染出内容', async () => {
     onOpenProject: noop, onNewDoc: noop
   }
   const expectations = {
-    OverviewScreen: ['在管项目', '风险分布', '本周'],
-    ProjectsScreen: ['手机银行 6.2 版本迭代', '按模块'],
-    OrdersScreen: ['转账限额调整（含人脸复核）', '阶段'],
+    OverviewScreen: ['在管项目', '风险分布', '本周', '需关注', '未排期', '模块', '端'],
+    ProjectsScreen: ['手机银行 6.2 版本迭代', '按模块', '智能视图', '在管'],
+    OrdersScreen: ['转账限额调整（含人脸复核）', '阶段', '目标端'],
     PlansScreen: ['与后端确认限额分级口径', '计划'],
     CalendarScreen: ['2026 年 10 月', '回到本月'],
     RisksScreen: ['已逾期'],
@@ -125,7 +134,8 @@ test('各业务页签在有数据时都能渲染出内容', async () => {
   for (const [name, expected] of Object.entries(expectations)) {
     const Screen = screens[name]
     assert.equal(typeof Screen, 'function', `${name} 未导出`)
-    const props = name === 'DocsScreen' ? { ...base, ...docsProps } : base
+    const own = name === 'OrdersScreen' ? { ...base, counts: orderCounts } : base
+    const props = name === 'DocsScreen' ? { ...base, ...docsProps } : own
     const markup = renderToStaticMarkup(React.createElement(Screen, props))
     assert.ok(markup.length > 200, `${name} 渲染内容过少`)
     assert.ok(!markup.includes('undefined'), `${name} 渲染里出现 undefined`)
@@ -214,6 +224,18 @@ function click(element) {
   element.dispatchEvent(new element.ownerDocument.defaultView.MouseEvent('click', { bubbles: true }))
 }
 
+/**
+ * 给受控输入框赋值。
+ * 不能直接写 `input.value = x`：React 在 DOM 节点上用 value tracker 记录了上次渲染的值，
+ * 直接赋值会让 tracker 认为「值没变」，onChange 永远不会触发（假绿）。
+ * 必须走原生 setter 绕过 tracker，再派发 input 事件。
+ */
+function typeInto(panel, element, value) {
+  const setter = Object.getOwnPropertyDescriptor(panel.dom.window.HTMLInputElement.prototype, 'value').set
+  setter.call(element, value)
+  element.dispatchEvent(new panel.dom.window.Event('input', { bubbles: true }))
+}
+
 test('jsdom 挂载：读取本机数据并渲染真实项目', async () => {
   const panel = await mountPanel()
   try {
@@ -254,12 +276,94 @@ test('jsdom 挂载：切换页签可看到工单、日历、风险与汇报', as
   try {
     await panel.flush()
     const tab = (label) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === label)
-    for (const [label, expected] of [['工单', '转账限额调整'], ['计划', '确认限额分级口径'], ['日历', '回到本月'], ['风险', '需关注'], ['汇报', '草稿']]) {
+    for (const [label, expected] of [['工单', '转账限额调整'], ['计划', '确认限额分级口径'], ['日历', '回到本月'], ['风险', '阻塞 / 紧急'], ['汇报', '草稿']]) {
       const node = tab(label)
       assert.ok(node, `没有找到 ${label} 页签`)
       await panel.act(() => click(node))
       assert.ok(panel.document.body.textContent.includes(expected), `${label} 页签缺少「${expected}」`)
     }
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：概览的智能视图卡点开就是项目页的对应视图', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    const cards = [...panel.document.querySelectorAll('.pmplan-smart-card')]
+    assert.equal(cards.length, 6, `概览应有一排智能视图卡，实际 ${cards.length} 个`)
+    const done = cards.find((node) => node.textContent.includes('已完成'))
+    assert.ok(done, '没有找到「已完成」统计卡')
+    await panel.act(() => click(done))
+
+    const tab = (label) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === label)
+    assert.equal(tab('项目').getAttribute('aria-selected'), 'true', '点统计卡应跳到项目页')
+    const pressed = [...panel.document.querySelectorAll('.pmplan-chip[aria-pressed="true"]')].map((node) => node.textContent)
+    assert.ok(pressed.some((text) => text.includes('已完成')), `项目页没有切到「已完成」视图：${pressed.join(' / ')}`)
+    assert.ok(panel.document.body.textContent.includes('上季度移动端质量复盘'), '已完成视图里应能看到已完成项目')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：页内筛查条只作用于本页，切页签不会互相冲掉', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    const tab = (label) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === label)
+    const chips = () => [...panel.document.querySelectorAll('.pmplan-chip')]
+
+    await panel.act(() => click(tab('项目')))
+    const moduleChip = chips().find((node) => node.textContent.trim() === '移动端开发')
+    assert.ok(moduleChip, `项目页没有「移动端开发」筛选项：${chips().map((node) => node.textContent).join(' / ')}`)
+    await panel.act(() => click(moduleChip))
+    assert.equal(moduleChip.getAttribute('aria-pressed'), 'true', '点过的筛选项应处于选中态')
+    assert.ok(panel.document.body.textContent.includes('清除筛选'), '有筛选条件时应出现「清除筛选」')
+    assert.ok(!panel.document.body.textContent.includes('上季度移动端质量复盘'), '别的模块的项目不该出现在筛选结果里')
+
+    await panel.act(() => click(tab('工单')))
+    assert.ok(chips().some((node) => node.textContent.trim() === '全部端'), '工单页缺少目标端筛选')
+    assert.equal(
+      chips().find((node) => node.textContent.trim() === '移动端开发').getAttribute('aria-pressed'),
+      'false',
+      '工单页不该继承项目页的模块筛选'
+    )
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：设置弹窗改模块名会落盘并级联到已有项目', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    const settings = [...panel.document.querySelectorAll('button')].find((node) => node.textContent === '设置')
+    assert.ok(settings, '顶栏没有「设置」按钮')
+    await panel.act(() => click(settings))
+
+    const input = panel.document.querySelector('input[aria-label="模块 2"]')
+    assert.ok(input, '设置弹窗里没有模块名称输入框')
+    assert.equal(input.value, '移动端开发')
+    await panel.act(() => typeInto(panel, input, '自研终端'))
+
+    const save = [...panel.document.querySelectorAll('button')].find((node) => node.textContent.startsWith('保存'))
+    assert.ok(save, '设置弹窗没有保存按钮')
+    assert.match(save.textContent, /改名/, `保存按钮应提示改名项数：${save.textContent}`)
+    await panel.act(() => click(save))
+    await panel.flush(700)
+
+    const written = panel.fake.memory.state
+    assert.ok(written.config.modules.includes('自研终端'), `模块配置没落盘：${JSON.stringify(written.config.modules)}`)
+    assert.ok(written.projects.every((project) => project.module !== '移动端开发'), '改名后旧模块名应被级联替换')
+    assert.ok(written.projects.some((project) => project.module === '自研终端'), '项目应改到新模块名下')
+
+    const tab = (label) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === label)
+    await panel.act(() => click(tab('项目')))
+    assert.ok(
+      [...panel.document.querySelectorAll('.pmplan-chip')].some((node) => node.textContent.trim() === '自研终端'),
+      '项目页筛选条应立刻出现新模块名'
+    )
   } finally {
     await panel.cleanup()
   }
@@ -278,8 +382,8 @@ test('jsdom 挂载：需求文档页在服务端有文档数据时正常渲染',
   const panel = await mountPanel({ docsPayload })
   try {
     await panel.flush()
-    const docsTab = [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === '需求文档')
-    assert.ok(docsTab, '没有找到需求文档页签')
+    const docsTab = [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === '文档')
+    assert.ok(docsTab, '没有找到文档页签')
     await panel.act(() => click(docsTab))
     await panel.flush(60)
     const text = panel.document.body.textContent
@@ -298,10 +402,10 @@ test('jsdom 挂载：搜索框按关键词过滤', async () => {
     await panel.flush()
     const input = panel.document.querySelector('input[type="search"]')
     assert.ok(input, '没有搜索框')
-    input.value = 'PAD'
-    await panel.act(() => input.dispatchEvent(new panel.dom.window.Event('input', { bubbles: true })))
+    await panel.act(() => typeInto(panel, input, 'PAD'))
     const text = panel.document.body.textContent
-    assert.ok(text.includes('PAD'), '搜索结果为空')
+    assert.ok(text.includes('移动展业 PAD 端客户建档重构'), '搜索结果为空')
+    assert.ok(!text.includes('信贷平台移动端需求池梳理'), '不匹配的项目应被过滤掉')
   } finally {
     await panel.cleanup()
   }

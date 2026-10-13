@@ -1,8 +1,12 @@
 /**
  * 项目计划工作台面板。
  *
- * 顶栏（品牌 / 搜索 / 刷新 / 新建 / 保存状态 / AI 会话）＋ 左侧筛选（模块轴 + 智能视图 + 端）
- * ＋ 业务页签（概览 · 项目 · 工单 · 计划 · 日历 · 风险 · 汇报）＋ 主内容区 ＋ 详情抽屉/编辑弹窗。
+ * 顶栏（品牌 / 搜索 / 刷新 / 新建 / 设置 / 保存状态 / AI 会话）＋ 八个主导航页签
+ * （概览 · 项目 · 工单 · 计划 · 文档 · 日历 · 风险 · 汇报）＋ 主内容区 ＋ 详情抽屉/编辑弹窗。
+ *
+ * 导航不再有左侧栏：筛选下沉到各自页面——概览用一排可点击的智能视图统计卡，
+ * 项目与工单各有自己的「智能视图 + 模块 + 端」筛查条。模块与端是**用户可配置项**，
+ * 在顶栏「设置」里增删改，取值落盘在 state.config。
  *
  * 依赖会话的动作只有「AI 会话」按钮：它把宿主提供的 `conversation` 节点放进右侧抽屉，
  * 面板自己不创建会话、不改写会话归属、不碰工作区；其余业务在没有会话时也能完整使用。
@@ -40,11 +44,13 @@ import {
 } from './ui.js'
 import { OverviewScreen, ProjectsScreen, OrdersScreen, PlansScreen, CalendarScreen, RisksScreen, ReportsScreen, DocsScreen } from './screens.js'
 import {
+  DEFAULT_MODULES,
+  DEFAULT_PLATFORMS,
   LOG_KINDS,
-  MODULES,
+  MAX_DIMENSION_ITEMS,
+  MAX_DIMENSION_LENGTH,
   ORDER_KINDS,
   ORDER_STAGES,
-  PLATFORMS,
   PLAN_STATUS,
   PRIORITIES,
   PROJECT_STATUS,
@@ -61,7 +67,7 @@ import {
   projectRisk,
   riskTone
 } from '../shared/metrics.js'
-import { applyView, moduleAxis, smartCounts } from '../shared/views.js'
+import { applyView, moduleOptions, orderSmartCounts, platformOptions, projectSmartCounts, targetOptions } from '../shared/views.js'
 import { buildReport } from '../shared/report.js'
 import { addDays, formatDate, formatDateTime, todayISO } from '../shared/date.js'
 import { isEmptyState, sampleState } from '../shared/seed.js'
@@ -73,7 +79,7 @@ const TABS = [
   { id: 'projects', label: '项目' },
   { id: 'orders', label: '工单' },
   { id: 'plans', label: '计划' },
-  { id: 'docs', label: '需求文档' },
+  { id: 'docs', label: '文档' },
   { id: 'calendar', label: '日历' },
   { id: 'risks', label: '风险' },
   { id: 'reports', label: '汇报' }
@@ -81,10 +87,28 @@ const TABS = [
 
 const toOptions = (values) => values.map((value) => ({ value, label: value }))
 
-const EMPTY_PROJECT = () => ({
+/**
+ * 下拉选项：配置项 + 当前值。
+ * 旧数据里可能存着后来被用户从配置中删掉的名称，补进选项才不会一编辑就把它悄悄改掉。
+ */
+const withCurrent = (names, current) => {
+  const list = [...names]
+  const value = String(current == null ? '' : current).trim()
+  if (value && !list.includes(value)) list.push(value)
+  return list
+}
+
+/** 设置弹窗里每一行都要有稳定 key，才能在改名/删除/排序时不串行。 */
+let dimensionKeySeed = 0
+const keyedRows = (names) => names.map((name) => {
+  dimensionKeySeed += 1
+  return { key: `dim-${dimensionKeySeed}`, name, original: name }
+})
+
+const EMPTY_PROJECT = (config) => ({
   name: '',
-  module: MODULES[0],
-  platform: '移动手机',
+  module: config.modules[0],
+  platform: config.platforms[0],
   status: '进行中',
   owner: '我',
   startedOn: todayISO(),
@@ -133,9 +157,11 @@ function dropById(list, id) {
 
 export function PlanWorkbench({ service, entry, conversation }) {
   const [view, setView] = useState('overview')
-  const [moduleId, setModuleId] = useState('')
-  const [smart, setSmart] = useState('all')
-  const [platform, setPlatform] = useState('')
+  // 筛选按页各自持有，互不干扰：概览只按模块/端收窄，项目与工单还各带一个智能视图。
+  const [overviewScope, setOverviewScope] = useState({ moduleId: '', platform: '' })
+  const [projectScope, setProjectScope] = useState({ smart: 'all', moduleId: '', platform: '' })
+  const [orderScope, setOrderScope] = useState({ smart: 'all', moduleId: '', target: '' })
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [data, setData] = useState(() => ({ revision: 0, state: normalizeState({}) }))
   const [status, setStatus] = useState('loading')
@@ -251,10 +277,40 @@ export function PlanWorkbench({ service, entry, conversation }) {
   const orders = data.state.orders
   const plans = data.state.plans
   const logs = data.state.logs
+  const config = data.state.config
 
-  const axis = useMemo(() => moduleAxis(projects, orders, plans, today), [projects, orders, plans, today])
-  const counts = useMemo(() => smartCounts(projects, orders, plans, { moduleId, platform }, today), [projects, orders, plans, moduleId, platform, today])
-  const scoped = useMemo(() => applyView(projects, orders, plans, { moduleId, view: smart, platform, search }, today), [projects, orders, plans, moduleId, smart, platform, search, today])
+  // 可配置维度的候选值：配置项 + 数据里出现过的历史取值，两边都不会丢。
+  const moduleNames = useMemo(() => moduleOptions(config.modules, projects), [config.modules, projects])
+  const platformNames = useMemo(() => platformOptions(config.platforms, projects), [config.platforms, projects])
+  const targetNames = useMemo(() => targetOptions(config.platforms, orders), [config.platforms, orders])
+
+  const overviewScoped = useMemo(
+    () => applyView(projects, orders, plans, { moduleId: overviewScope.moduleId, platform: overviewScope.platform, search }, today),
+    [projects, orders, plans, overviewScope, search, today]
+  )
+  const overviewCounts = useMemo(
+    () => projectSmartCounts(projects, orders, plans, { moduleId: overviewScope.moduleId, platform: overviewScope.platform }, today),
+    [projects, orders, plans, overviewScope, today]
+  )
+  const projectScoped = useMemo(
+    () => applyView(projects, orders, plans, { moduleId: projectScope.moduleId, view: projectScope.smart, platform: projectScope.platform, search }, today),
+    [projects, orders, plans, projectScope, search, today]
+  )
+  const projectCounts = useMemo(
+    () => projectSmartCounts(projects, orders, plans, { moduleId: projectScope.moduleId, platform: projectScope.platform }, today),
+    [projects, orders, plans, projectScope, today]
+  )
+  const orderScoped = useMemo(
+    () => applyView(projects, orders, plans, { moduleId: orderScope.moduleId, view: orderScope.smart, target: orderScope.target, search }, today),
+    [projects, orders, plans, orderScope, search, today]
+  )
+  const orderCounts = useMemo(
+    () => orderSmartCounts(projects, orders, plans, { moduleId: orderScope.moduleId, target: orderScope.target }, today),
+    [projects, orders, plans, orderScope, today]
+  )
+  // 计划/日历/风险/汇报不参与页内筛查，始终看全量。
+  const allScoped = useMemo(() => ({ projects, orders, plans }), [projects, orders, plans])
+
   const stats = useMemo(() => kpis(projects, orders, plans, today), [projects, orders, plans, today])
   const summaryLine = useMemo(() => headline(projects, orders, plans, today), [projects, orders, plans, today])
   const decorated = useMemo(() => decorateProjects(projects, orders, plans, today), [projects, orders, plans, today])
@@ -298,6 +354,30 @@ export function PlanWorkbench({ service, entry, conversation }) {
     mutate((state) => ({ ...state, plans: replaceById(state.plans, payload) }), '计划已保存')
     setEditor(null)
     setDrawer({ type: 'plan', id: payload.id })
+  }, [mutate])
+
+  /**
+   * 保存模块 / 端配置，并把「改名」沿用到既有数据上。
+   * 只做改名级联，不做删除级联：删掉一个选项时历史数据原样保留，旧名称仍会作为
+   * 「历史取值」出现在下拉框里——避免误删一个选项就把项目上的归属悄悄清空。
+   */
+  const saveConfig = useCallback((next) => {
+    const moduleMap = new Map(next.renamed?.modules || [])
+    const platformMap = new Map(next.renamed?.platforms || [])
+    mutate((state) => ({
+      ...state,
+      config: { modules: next.modules, platforms: next.platforms },
+      projects: state.projects.map((project) => ({
+        ...project,
+        module: moduleMap.get(project.module) || project.module,
+        platform: platformMap.get(project.platform) || project.platform
+      })),
+      orders: state.orders.map((order) => ({
+        ...order,
+        target: platformMap.get(order.target) || order.target
+      }))
+    }), '设置已保存')
+    setSettingsOpen(false)
   }, [mutate])
 
   const removeItem = useCallback((type, id) => {
@@ -535,28 +615,27 @@ export function PlanWorkbench({ service, entry, conversation }) {
     }
   }, [reportText, reportKind, today, showToast])
 
+  // 各页共用的一套 props；带筛查条的页面在下面按页覆盖 scoped/counts/scope。
   const screenProps = {
     today,
     projects,
     orders,
     plans,
     logs,
-    scoped,
     decorated,
     stats,
     summaryLine,
-    moduleId,
-    smart,
-    platform,
+    config,
+    moduleNames,
+    platformNames,
+    targetNames,
     search,
-    axis,
-    counts,
     onOpenProject: openProject,
     onOpenOrder: openOrder,
     onOpenPlan: openPlan,
-    onEditProject: (project) => setEditor({ type: 'project', form: project || EMPTY_PROJECT() }),
-    onEditOrder: (order) => setEditor({ type: 'order', form: order || EMPTY_ORDER(scoped.projects[0]?.id) }),
-    onEditPlan: (plan) => setEditor({ type: 'plan', form: plan || EMPTY_PLAN(scoped.projects[0]?.id) }),
+    onEditProject: (project) => setEditor({ type: 'project', form: project || EMPTY_PROJECT(config) }),
+    onEditOrder: (order) => setEditor({ type: 'order', form: order || EMPTY_ORDER(projects[0]?.id) }),
+    onEditPlan: (plan) => setEditor({ type: 'plan', form: plan || EMPTY_PLAN(projects[0]?.id) }),
     onTogglePlan: togglePlanDone,
     onToggleOrderStage: setOrderStage,
     onDelete: (type, id) => setConfirm({ type, id }),
@@ -574,6 +653,38 @@ export function PlanWorkbench({ service, entry, conversation }) {
     downloadReport
   }
 
+  /** 概览页：只按模块/端收窄；点统计卡会带着这个范围跳到项目页的对应智能视图。 */
+  const overviewProps = {
+    ...screenProps,
+    scoped: overviewScoped,
+    counts: overviewCounts,
+    scope: overviewScope,
+    setScope: setOverviewScope,
+    onOpenSmart: (id) => {
+      setProjectScope((scope) => ({ ...scope, smart: id, moduleId: overviewScope.moduleId, platform: overviewScope.platform }))
+      setView('projects')
+    }
+  }
+
+  const projectProps = {
+    ...screenProps,
+    scoped: projectScoped,
+    counts: projectCounts,
+    scope: projectScope,
+    setScope: setProjectScope
+  }
+
+  const orderProps = {
+    ...screenProps,
+    scoped: orderScoped,
+    counts: orderCounts,
+    scope: orderScope,
+    setScope: setOrderScope
+  }
+
+  // 计划/日历/风险/汇报不参与页内筛查，始终看全量。
+  const plainProps = { ...screenProps, scoped: allScoped }
+
   const rendered = () => {
     if (status === 'loading') return h(Empty, { text: '正在读取本机数据…' })
     if (status === 'error') {
@@ -582,10 +693,10 @@ export function PlanWorkbench({ service, entry, conversation }) {
         action: h(Button, { variant: 'primary', onClick: load }, '重试')
       })
     }
-    if (view === 'overview') return h(OverviewScreen, screenProps)
-    if (view === 'projects') return h(ProjectsScreen, screenProps)
-    if (view === 'orders') return h(OrdersScreen, screenProps)
-    if (view === 'plans') return h(PlansScreen, screenProps)
+    if (view === 'overview') return h(OverviewScreen, overviewProps)
+    if (view === 'projects') return h(ProjectsScreen, projectProps)
+    if (view === 'orders') return h(OrdersScreen, orderProps)
+    if (view === 'plans') return h(PlansScreen, plainProps)
     if (view === 'docs') {
       return h(DocsScreen, {
         docs,
@@ -621,9 +732,9 @@ export function PlanWorkbench({ service, entry, conversation }) {
         onNewDoc: createDoc
       })
     }
-    if (view === 'calendar') return h(CalendarScreen, screenProps)
-    if (view === 'risks') return h(RisksScreen, screenProps)
-    return h(ReportsScreen, screenProps)
+    if (view === 'calendar') return h(CalendarScreen, plainProps)
+    if (view === 'risks') return h(RisksScreen, plainProps)
+    return h(ReportsScreen, plainProps)
   }
 
   return h('div', { className: 'pmplan' },
@@ -642,9 +753,10 @@ export function PlanWorkbench({ service, entry, conversation }) {
         onChange: (event) => setSearch(event.target.value)
       }),
       h(Button, { onClick: load, title: '重新加载本机数据' }, '刷新'),
-      h(Button, { variant: 'primary', onClick: () => setEditor({ type: 'project', form: EMPTY_PROJECT() }) }, '新建项目'),
-      h(Button, { onClick: () => setEditor({ type: 'order', form: EMPTY_ORDER(scoped.projects[0]?.id) }) }, '新建工单'),
-      h(Button, { onClick: () => setEditor({ type: 'plan', form: EMPTY_PLAN(scoped.projects[0]?.id) }) }, '新建计划'),
+      h(Button, { variant: 'primary', onClick: () => setEditor({ type: 'project', form: EMPTY_PROJECT(config) }) }, '新建项目'),
+      h(Button, { onClick: () => setEditor({ type: 'order', form: EMPTY_ORDER(projects[0]?.id) }) }, '新建工单'),
+      h(Button, { onClick: () => setEditor({ type: 'plan', form: EMPTY_PLAN(projects[0]?.id) }) }, '新建计划'),
+      h(Button, { onClick: () => setSettingsOpen(true), title: '配置模块、端与示例数据' }, '设置'),
       h(Button, {
         onClick: () => setChatOpen((open) => !open),
         'aria-pressed': chatOpen ? 'true' : 'false',
@@ -655,56 +767,6 @@ export function PlanWorkbench({ service, entry, conversation }) {
       )
     ),
     h('div', { className: 'pmplan-body' },
-      h('nav', { className: 'pmplan-side', 'aria-label': '筛选' },
-        h('div', { className: 'pmplan-side-group' },
-          h('div', { className: 'pmplan-side-title' }, '模块'),
-          axis.map((row) => h('button', {
-            key: `m-${row.id || 'all'}`,
-            type: 'button',
-            className: 'pmplan-side-item',
-            'aria-current': moduleId === row.id ? 'true' : 'false',
-            onClick: () => setModuleId(row.id)
-          },
-            h('span', { className: 'pmplan-side-item-label', title: row.label }, row.label),
-            row.attention ? h('span', { className: 'pmplan-side-risk', title: `${row.attention} 个需关注` }, `!${row.attention}`) : null,
-            h('span', { className: 'pmplan-side-count' }, String(row.count))
-          ))
-        ),
-        h('div', { className: 'pmplan-side-group' },
-          h('div', { className: 'pmplan-side-title' }, '智能视图'),
-          counts.map((row) => h('button', {
-            key: `s-${row.id}`,
-            type: 'button',
-            className: 'pmplan-side-item',
-            'aria-current': smart === row.id ? 'true' : 'false',
-            onClick: () => setSmart(row.id)
-          },
-            h('span', { className: 'pmplan-side-item-label' }, row.label),
-            h('span', { className: 'pmplan-side-count' }, String(row.count))
-          ))
-        ),
-        h('div', { className: 'pmplan-side-group' },
-          h('div', { className: 'pmplan-side-title' }, '端'),
-          h('button', {
-            type: 'button',
-            className: 'pmplan-side-item',
-            'aria-current': platform === '' ? 'true' : 'false',
-            onClick: () => setPlatform('')
-          }, h('span', { className: 'pmplan-side-item-label' }, '全部端')),
-          PLATFORMS.map((name) => h('button', {
-            key: `p-${name}`,
-            type: 'button',
-            className: 'pmplan-side-item',
-            'aria-current': platform === name ? 'true' : 'false',
-            onClick: () => setPlatform(platform === name ? '' : name)
-          }, h('span', { className: 'pmplan-side-item-label' }, name)))
-        ),
-        h('div', { className: 'pmplan-side-foot' },
-          h(Button, { size: 'small', onClick: () => setEditor({ type: 'project', form: EMPTY_PROJECT() }) }, '新建项目'),
-          h(Button, { size: 'small', onClick: () => mutate(() => sampleState(today), '已重新生成示例数据') }, '示例数据'),
-          h(Button, { size: 'small', variant: 'danger', onClick: () => setConfirm({ type: 'clear' }) }, '清空')
-        )
-      ),
       h('main', { className: 'pmplan-main' },
         h('div', { className: 'pmplan-tabs', role: 'tablist', 'aria-label': '看板页签' },
           TABS.map((tab) => h('button', {
@@ -764,12 +826,33 @@ export function PlanWorkbench({ service, entry, conversation }) {
           onSelectView: (next) => { setView(next); setDrawer(null) }
         })
       : null,
+    settingsOpen
+      ? h(SettingsModal, {
+          config,
+          projects,
+          orders,
+          maxItems: MAX_DIMENSION_ITEMS,
+          maxLength: MAX_DIMENSION_LENGTH,
+          onClose: () => setSettingsOpen(false),
+          onSave: saveConfig,
+          onSample: () => {
+            setSettingsOpen(false)
+            mutate(() => sampleState(today), '已重新生成示例数据')
+          },
+          onClear: () => {
+            setSettingsOpen(false)
+            setConfirm({ type: 'clear' })
+          }
+        })
+      : null,
     editor
       ? h(EditorModal, {
           type: editor.type,
           form: editor.form,
           projects,
           orders,
+          moduleNames,
+          platformNames,
           onClose: () => setEditor(null),
           onSubmit: editor.type === 'project' ? saveProject : editor.type === 'order' ? saveOrder : savePlan
         })
@@ -1057,7 +1140,7 @@ function LogComposer({ draft, setDraft, onSubmit }) {
 
 /* ---------------- 编辑弹窗 ---------------- */
 
-function EditorModal({ type, form, projects, orders, onClose, onSubmit }) {
+function EditorModal({ type, form, projects, orders, moduleNames, platformNames, onClose, onSubmit }) {
   const [draft, setDraft] = useState(form)
   const set = (patch) => setDraft((current) => ({ ...current, ...patch }))
   const title = type === 'project'
@@ -1071,8 +1154,8 @@ function EditorModal({ type, form, projects, orders, onClose, onSubmit }) {
   const projectFields = [
     h(TextField, { key: 'name', label: '项目名称', value: draft.name, onChange: (value) => set({ name: value }), placeholder: '例如：手机银行 6.2 版本迭代' }),
     h(FieldRow, { key: 'row1' },
-      h(Select, { label: '模块', value: draft.module, onChange: (value) => set({ module: value }), options: toOptions(MODULES) }),
-      h(Select, { label: '端', value: draft.platform, onChange: (value) => set({ platform: value }), options: toOptions(PLATFORMS) }),
+      h(Select, { label: '模块', value: draft.module, onChange: (value) => set({ module: value }), options: toOptions(withCurrent(moduleNames, draft.module)) }),
+      h(Select, { label: '端', value: draft.platform, onChange: (value) => set({ platform: value }), options: toOptions(withCurrent(platformNames, draft.platform)) }),
       h(Select, { label: '状态', value: draft.status, onChange: (value) => set({ status: value }), options: toOptions(PROJECT_STATUS) })
     ),
     h(FieldRow, { key: 'row2' },
@@ -1096,7 +1179,7 @@ function EditorModal({ type, form, projects, orders, onClose, onSubmit }) {
     ),
     h(FieldRow, { key: 'row2' },
       h(Select, { label: '阶段', value: draft.stage, onChange: (value) => set({ stage: value }), options: toOptions(ORDER_STAGES) }),
-      h(Select, { label: '目标端', value: draft.target, onChange: (value) => set({ target: value }), options: toOptions(PLATFORMS), allowEmpty: true, emptyLabel: '未指定' }),
+      h(Select, { label: '目标端', value: draft.target, onChange: (value) => set({ target: value }), options: toOptions(withCurrent(platformNames, draft.target)), allowEmpty: true, emptyLabel: '未指定' }),
       h(TextField, { label: '负责人', value: draft.owner, onChange: (value) => set({ owner: value }) })
     ),
     h(FieldRow, { key: 'row3' },
@@ -1131,6 +1214,128 @@ function EditorModal({ type, form, projects, orders, onClose, onSubmit }) {
     ]
   },
     type === 'project' ? projectFields : type === 'order' ? orderFields : planFields
+  )
+}
+
+/* ---------------- 设置弹窗（模块 / 端 可配置） ---------------- */
+
+/**
+ * 模块与端以前是写死在源码里的常量，想改就得改代码、重新打包。
+ * 这里把它们变成配置项：可增、可删、可改名，改完落盘在 state.config。
+ * - 改名：级联到既有项目（module/platform）与工单（target）。
+ * - 删除：不动历史数据，旧名称仍作为「历史取值」出现在下拉框里。
+ * 每一行都显示「引用 n」，让人在删之前先看到会影响多少个条目。
+ */
+function SettingsModal({ config, projects, orders, maxItems, maxLength, onClose, onSave, onSample, onClear }) {
+  const [modules, setModules] = useState(() => keyedRows(config.modules))
+  const [platforms, setPlatforms] = useState(() => keyedRows(config.platforms))
+
+  const clean = (rows) => rows.map((row) => row.name.trim()).filter(Boolean)
+  const hasDuplicate = (rows) => {
+    const names = clean(rows)
+    return names.length !== new Set(names).size
+  }
+  const moduleNames = clean(modules)
+  const platformNames = clean(platforms)
+  const tooLong = [...modules, ...platforms].some((row) => row.name.trim().length > maxLength)
+  const invalid = moduleNames.length === 0 || platformNames.length === 0 || hasDuplicate(modules) || hasDuplicate(platforms) || tooLong
+
+  const invalidReason = moduleNames.length === 0 || platformNames.length === 0
+    ? '模块和端至少各保留一项。'
+    : hasDuplicate(modules) || hasDuplicate(platforms)
+      ? '同一维度里的名称不能重复。'
+      : `单项名称不能超过 ${maxLength} 个字符。`
+
+  const renamesOf = (rows) => rows
+    .filter((row) => row.original && row.name.trim() && row.name.trim() !== row.original)
+    .map((row) => [row.original, row.name.trim()])
+
+  const renameCount = (rows) => renamesOf(rows).length
+
+  const setRow = (setRows, key, name) => setRows((rows) => rows.map((row) => (row.key === key ? { ...row, name } : row)))
+  const dropRow = (setRows, key) => setRows((rows) => (rows.length > 1 ? rows.filter((row) => row.key !== key) : rows))
+  const addRow = (setRows) => setRows((rows) => (rows.length >= maxItems ? rows : [...rows, ...keyedRows([''])]))
+  const resetRows = (setRows, names) => setRows(keyedRows(names))
+
+  const usage = (rows, items, field) => rows.map((row) => (
+    row.original ? items.filter((item) => item[field] === row.original).length : 0
+  ))
+
+  const dimension = (title, hint, rows, setRows, items, field, defaults) => {
+    const counts = usage(rows, items, field)
+    return h('div', { className: 'pmplan-dim' },
+      h('div', { className: 'pmplan-dim-head' },
+        h('div', null,
+          h('strong', null, title),
+          h('div', { className: 'pmplan-small pmplan-muted' }, hint)
+        ),
+        h('div', { className: 'pmplan-settings-actions' },
+          h(Button, { size: 'small', onClick: () => addRow(setRows), disabled: rows.length >= maxItems }, '添加'),
+          h(Button, { size: 'small', variant: 'ghost', onClick: () => resetRows(setRows, defaults), title: '恢复为出厂默认值' }, '恢复默认')
+        )
+      ),
+      rows.map((row, index) => h('div', { className: 'pmplan-dim-row', key: row.key },
+        h('span', { className: 'pmplan-dim-index' }, String(index + 1)),
+        h('input', {
+          className: 'pmplan-input',
+          value: row.name,
+          maxLength,
+          placeholder: '名称',
+          'aria-label': `${title} ${index + 1}`,
+          onChange: (event) => setRow(setRows, row.key, event.target.value)
+        }),
+        h('span', { className: 'pmplan-dim-usage' }, `引用 ${counts[index]}`),
+        h(Button, {
+          size: 'small',
+          variant: 'ghost',
+          disabled: rows.length <= 1,
+          title: '删除该项。已有数据不会被清空，旧名称会作为历史取值保留在下拉框里。',
+          onClick: () => dropRow(setRows, row.key)
+        }, '删除')
+      ))
+    )
+  }
+
+  const renamed = renameCount(modules) + renameCount(platforms)
+
+  return h(Modal, {
+    title: '设置',
+    width: 720,
+    onClose,
+    footer: [
+      h(Button, {
+        key: 'save',
+        variant: 'primary',
+        disabled: invalid,
+        onClick: () => onSave({
+          modules: moduleNames,
+          platforms: platformNames,
+          renamed: { modules: renamesOf(modules), platforms: renamesOf(platforms) }
+        })
+      }, renamed > 0 ? `保存（含 ${renamed} 项改名）` : '保存'),
+      h(Button, { key: 'cancel', onClick: onClose }, '取消')
+    ]
+  },
+    h('div', { className: 'pmplan-settings' },
+      h('p', { className: 'pmplan-small pmplan-muted' },
+        '模块和端是可配置项：改完会立刻出现在新建/编辑下拉框、页内筛选条和看板分组里。改名会把已有项目、工单上的旧名称一并改过来；删除不会清空数据。'
+      ),
+      invalid ? h(Banner, { tone: 'warn', children: invalidReason }) : null,
+      dimension('模块', `${moduleNames.length}/${maxItems} · 项目按它分组，概览/项目/工单都可筛查`, modules, setModules, projects, 'module', DEFAULT_MODULES),
+      dimension('端', `${platformNames.length}/${maxItems} · 项目登记「端」，工单登记「目标端」`, platforms, setPlatforms, projects, 'platform', DEFAULT_PLATFORMS),
+      h('div', { className: 'pmplan-dim' },
+        h('div', { className: 'pmplan-dim-head' },
+          h('div', null,
+            h('strong', null, '演示数据'),
+            h('div', { className: 'pmplan-small pmplan-muted' }, '重新生成会用一套示例项目 / 工单 / 计划覆盖当前全部内容')
+          )
+        ),
+        h('div', { className: 'pmplan-settings-actions' },
+          h(Button, { size: 'small', onClick: onSample }, '重新生成示例数据'),
+          h(Button, { size: 'small', variant: 'danger', onClick: onClear }, '清空全部数据')
+        )
+      )
+    )
   )
 }
 

@@ -1,8 +1,11 @@
 /**
- * 视图层纯函数：模块轴（左侧导航）、智能视图、搜索、分组与排序。
+ * 视图层纯函数：可配置维度（模块、端）的取值、智能视图、搜索、分组与排序。
+ *
+ * 模块与端的**取值来自 state.config**，函数一律把配置当作参数传入，
+ * 并且始终把数据里出现过的历史取值并进列表——用户改配置不会让旧数据消失。
  */
 
-import { DONE_PLAN_STATUS, DONE_STAGES, PLATFORMS } from './model.js'
+import { DEFAULT_MODULES, DEFAULT_PLATFORMS, DONE_PLAN_STATUS, DONE_STAGES } from './model.js'
 import {
   decorateProjects,
   isOrderDone,
@@ -17,12 +20,9 @@ import {
 } from './metrics.js'
 import { endOfWeek, startOfWeek, todayISO } from './date.js'
 
-/** 固定模块轴：项目按 `module` 字段归入其中之一，缺省归「公司项目」。 */
-export const MODULES = ['公司项目', '移动端开发', '日常工作', '其他项目']
-
 export const SMART_VIEWS = [
   // 'all' 是「在管」口径：与 kpis.active 一致，默认排除已完成的项目/工单/计划。
-  // 想看已完成请用 'done'；左侧「模块」轴的「全部」才是不分状态的全量口径。
+  // 想看已完成请用 'done'；模块/端筛选条上的「全部」才是不分状态的全量口径。
   { id: 'all', label: '在管' },
   { id: 'attention', label: '需关注' },
   { id: 'overdue', label: '已逾期' },
@@ -31,42 +31,34 @@ export const SMART_VIEWS = [
   { id: 'done', label: '已完成' }
 ]
 
-export function moduleOf(project) {
+export function moduleOf(project, modules = DEFAULT_MODULES) {
   const value = project && project.module ? String(project.module).trim() : ''
-  return value || MODULES[0]
+  return value || modules[0]
 }
 
-/** 左侧「模块」轴：全部 + 固定模块 + 数据里出现过的自定义模块，带项目数与风险点。 */
-export function moduleAxis(projects, orders, plans, today = todayISO()) {
-  const decorated = decorateProjects(projects, orders, plans, today)
-  const names = [...MODULES]
-  for (const project of decorated) {
-    const name = moduleOf(project)
-    if (!names.includes(name)) names.push(name)
+/** 过滤条/分组用的维度取值：配置项 + 数据里出现过的历史取值，保证不丢旧数据。 */
+function mergeNames(configured, values) {
+  const names = [...configured]
+  for (const value of values) {
+    const name = String(value == null ? '' : value).trim()
+    if (name && !names.includes(name)) names.push(name)
   }
-  const rows = names.map((name) => {
-    const items = decorated.filter((project) => moduleOf(project) === name)
-    const ids = new Set(items.map((project) => project.id))
-    return {
-      id: name,
-      label: name,
-      count: items.length,
-      attention: items.filter((project) => project.attention).length,
-      openOrders: orders.filter((order) => !isOrderDone(order) && ids.has(order.projectId)).length,
-      openPlans: plans.filter((plan) => !isPlanDone(plan) && ids.has(plan.projectId)).length
-    }
-  })
-  return [
-    {
-      id: '',
-      label: '全部',
-      count: decorated.length,
-      attention: decorated.filter((project) => project.attention).length,
-      openOrders: orders.filter((order) => !isOrderDone(order)).length,
-      openPlans: plans.filter((plan) => !isPlanDone(plan)).length
-    },
-    ...rows
-  ]
+  return names
+}
+
+/** 「模块」筛选条的取值列表。 */
+export function moduleOptions(modules, projects) {
+  return mergeNames(modules, projects.map((project) => moduleOf(project, modules)))
+}
+
+/** 「端」筛选条的取值列表（按项目实际登记的端）。 */
+export function platformOptions(platforms, projects) {
+  return mergeNames(platforms, projects.map((project) => project.platform))
+}
+
+/** 工单「目标端」筛选条的取值列表。 */
+export function targetOptions(platforms, orders) {
+  return mergeNames(platforms, orders.map((order) => order.target))
 }
 
 export function inModule(project, moduleId) {
@@ -82,7 +74,7 @@ function matchesKeyword(text, keyword) {
  * `search` 对项目、工单、计划同时生效（命中项目则保留其下条目）。
  * 返回 `{ projects, orders, plans }`，三者口径一致。
  */
-export function applyView(projects, orders, plans, { moduleId = '', view = 'all', platform = '', search = '' } = {}, today = todayISO()) {
+export function applyView(projects, orders, plans, { moduleId = '', view = 'all', platform = '', target = '', search = '' } = {}, today = todayISO()) {
   const weekEnd = endOfWeek(today)
   let scoped = projects.filter((project) => inModule(project, moduleId))
   if (platform) scoped = scoped.filter((project) => project.platform === platform)
@@ -149,28 +141,34 @@ export function applyView(projects, orders, plans, { moduleId = '', view = 'all'
     scopedPlans = scopedPlans.filter((plan) => !isPlanDone(plan))
   }
 
+  // 「目标端」只收窄工单——它说的是工单自己要交付到哪个端，与项目登记的端不是一回事。
+  if (target) scopedOrders = scopedOrders.filter((order) => order.target === target)
+
   return { projects: scoped, orders: scopedOrders, plans: scopedPlans }
 }
 
-/** 智能视图计数（跟随模块与平台筛选）。 */
-export function smartCounts(projects, orders, plans, { moduleId = '', platform = '' } = {}, today = todayISO()) {
-  return SMART_VIEWS.map((view) => {
-    const scoped = applyView(projects, orders, plans, { moduleId, view: view.id, platform }, today)
-    return {
-      ...view,
-      count: view.id === 'all' ? scoped.projects.length : scoped.projects.length + scoped.orders.length + scoped.plans.length
-    }
-  })
+/**
+ * 各页的智能视图计数：只数本页的主对象。
+ * 「项目」页数项目、「工单」页数工单——统计卡点进去之后，页内筛查条上的数字必须对得上。
+ */
+export function projectSmartCounts(projects, orders, plans, { moduleId = '', platform = '' } = {}, today = todayISO()) {
+  return SMART_VIEWS.map((view) => ({
+    ...view,
+    count: applyView(projects, orders, plans, { moduleId, view: view.id, platform }, today).projects.length
+  }))
 }
 
-/** 按模块分区（模块看板）。 */
-export function groupByModule(projects, orders, plans, today = todayISO()) {
+export function orderSmartCounts(projects, orders, plans, { moduleId = '', target = '' } = {}, today = todayISO()) {
+  return SMART_VIEWS.map((view) => ({
+    ...view,
+    count: applyView(projects, orders, plans, { moduleId, view: view.id, target }, today).orders.length
+  }))
+}
+
+/** 按模块分区（模块看板）。模块列表来自配置项 + 数据里出现过的历史取值。 */
+export function groupByModule(projects, orders, plans, today = todayISO(), modules = DEFAULT_MODULES) {
   const decorated = decorateProjects(projects, orders, plans, today)
-  const names = [...MODULES]
-  for (const project of decorated) {
-    const name = moduleOf(project)
-    if (!names.includes(name)) names.push(name)
-  }
+  const names = mergeNames(modules, decorated.map((project) => moduleOf(project, modules)))
   const groups = []
   for (const name of names) {
     const items = decorated
@@ -182,11 +180,11 @@ export function groupByModule(projects, orders, plans, today = todayISO()) {
   return groups
 }
 
-/** 按平台分区（多端视角）。 */
-export function groupByPlatform(projects, orders, plans, today = todayISO()) {
+/** 按端分区（多端视角）。端列表来自配置项 + 数据里出现过的历史取值。 */
+export function groupByPlatform(projects, orders, plans, today = todayISO(), platforms = DEFAULT_PLATFORMS) {
   const decorated = decorateProjects(projects, orders, plans, today)
   const groups = []
-  for (const name of PLATFORMS) {
+  for (const name of mergeNames(platforms, decorated.map((project) => project.platform))) {
     const items = decorated
       .filter((project) => project.platform === name)
       .sort((left, right) => riskRank(left.risk) - riskRank(right.risk) || (left.dueDate || '9999').localeCompare(right.dueDate || '9999'))

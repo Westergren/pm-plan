@@ -6,9 +6,9 @@
  */
 
 import {
+  DEFAULT_PLATFORMS,
   DONE_PLAN_STATUS,
   DONE_STAGES,
-  PLATFORMS,
   PRIORITIES,
   PROJECT_STATUS,
   ORDER_STAGES,
@@ -223,9 +223,14 @@ export function riskBreakdown(projects, orders, plans, today = todayISO()) {
   return RISK_LEVELS.map((level) => ({ level, count: counts.get(level) || 0, tone: riskTone(level) }))
 }
 
-/** 平台负载：按端统计项目数与未结束工单数。 */
-export function platformLoad(projects, orders, today = todayISO()) {
-  const rows = PLATFORMS.map((platform) => {
+/** 平台负载：按端统计项目数与未结束工单数。端列表来自配置项 + 数据里出现过的历史取值。 */
+export function platformLoad(projects, orders, today = todayISO(), platforms = DEFAULT_PLATFORMS) {
+  const names = [...platforms]
+  for (const project of projects) {
+    const name = String(project.platform == null ? '' : project.platform).trim()
+    if (name && !names.includes(name)) names.push(name)
+  }
+  const rows = names.map((platform) => {
     const items = projects.filter((project) => project.platform === platform)
     const ids = new Set(items.map((project) => project.id))
     const related = orders.filter((order) => ids.has(order.projectId) && !isOrderDone(order))

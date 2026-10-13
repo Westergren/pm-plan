@@ -1,9 +1,9 @@
 /**
  * 示例数据：第一次进入且数据为空时生成，方便立刻看到所有看板。
- * 所有条目都带「示例」标签，随时可以在侧栏一键清空。
+ * 所有条目都带「示例」标签，随时可以在「设置」里一键清空。
  */
 
-import { createId } from './model.js'
+import { DEFAULT_MODULES, DEFAULT_PLATFORMS, createId } from './model.js'
 import { addDays, todayISO } from './date.js'
 
 const SEED = '示例'
@@ -148,6 +148,7 @@ export function sampleState(today = todayISO()) {
     version: 1,
     updatedAt: new Date().toISOString(),
     seededAt: new Date().toISOString(),
+    config: { modules: [...DEFAULT_MODULES], platforms: [...DEFAULT_PLATFORMS] },
     projects,
     orders,
     plans,
