@@ -134,15 +134,13 @@ const EMPTY_ORDER = (config) => ({
   description: ''
 })
 
-const EMPTY_PLAN = (projectId) => ({
-  projectId: projectId || '',
-  orderId: '',
+const EMPTY_PLAN = (module) => ({
+  module: module || '',
   title: '',
   owner: '我',
   status: '未开始',
   startedOn: todayISO(),
   dueDate: addDays(todayISO(), 3),
-  progress: 0,
   note: ''
 })
 
@@ -383,18 +381,16 @@ export function PlanWorkbench({ service, entry, conversation }) {
   const removeItem = useCallback((type, id) => {
     mutate((state) => {
       if (type === 'project') {
-        // 工单挂在模块上，不归项目——删项目只连带它的计划与日志，不能顺手把工单删掉。
-        const planIds = new Set(state.plans.filter((plan) => plan.projectId === id).map((plan) => plan.id))
+        // 工单与计划都挂在模块上，不归项目——删项目只删项目自己与它的进展记录。
         return {
           ...state,
           projects: dropById(state.projects, id),
-          plans: state.plans.filter((plan) => plan.projectId !== id),
-          logs: state.logs.filter((log) => !(log.refType === 'project' && log.refId === id) && !(log.refType === 'plan' && planIds.has(log.refId)))
+          logs: state.logs.filter((log) => !(log.refType === 'project' && log.refId === id))
         }
       }
       const refType = type === 'order' ? 'order' : 'plan'
       const patch = type === 'order'
-        ? { orders: dropById(state.orders, id), plans: state.plans.map((plan) => (plan.orderId === id ? { ...plan, orderId: '' } : plan)) }
+        ? { orders: dropById(state.orders, id) }
         : { plans: dropById(state.plans, id) }
       return { ...state, ...patch, logs: state.logs.filter((log) => !(log.refType === refType && log.refId === id)) }
     }, '已删除')
@@ -415,7 +411,6 @@ export function PlanWorkbench({ service, entry, conversation }) {
       plans: replaceById(state.plans, {
         ...plan,
         status: done ? '进行中' : '已完成',
-        progress: done ? Math.min(plan.progress, 90) : 100,
         updatedAt: new Date().toISOString()
       })
     }), done ? '计划已恢复' : '计划已完成')
@@ -634,7 +629,7 @@ export function PlanWorkbench({ service, entry, conversation }) {
     onOpenPlan: openPlan,
     onEditProject: (project) => setEditor({ type: 'project', form: project || EMPTY_PROJECT(config) }),
     onEditOrder: (order) => setEditor({ type: 'order', form: order || EMPTY_ORDER(config) }),
-    onEditPlan: (plan) => setEditor({ type: 'plan', form: plan || EMPTY_PLAN(projects[0]?.id) }),
+    onEditPlan: (plan) => setEditor({ type: 'plan', form: plan || EMPTY_PLAN(moduleNames[0]) }),
     onTogglePlan: togglePlanDone,
     onToggleOrderStage: setOrderStage,
     onDelete: (type, id) => setConfirm({ type, id }),
@@ -755,7 +750,7 @@ export function PlanWorkbench({ service, entry, conversation }) {
       h(Button, { onClick: load, title: '重新加载本机数据' }, '刷新'),
       h(Button, { variant: 'primary', onClick: () => setEditor({ type: 'project', form: EMPTY_PROJECT(config) }) }, '新建项目'),
       h(Button, { onClick: () => setEditor({ type: 'order', form: EMPTY_ORDER(config) }) }, '新建工单'),
-      h(Button, { onClick: () => setEditor({ type: 'plan', form: EMPTY_PLAN(projects[0]?.id) }) }, '新建计划'),
+      h(Button, { onClick: () => setEditor({ type: 'plan', form: EMPTY_PLAN(moduleNames[0]) }) }, '新建计划'),
       h(Button, { onClick: () => setSettingsOpen(true), title: '配置模块、端与示例数据' }, '设置'),
       h(Button, {
         onClick: () => setChatOpen((open) => !open),
@@ -918,9 +913,8 @@ function DetailDrawer({ type, item, projects, orders, plans, logs, docs, today, 
   if (!item) return null
 
   if (type === 'project') {
-    const relatedPlans = plans.filter((plan) => plan.projectId === item.id)
     const relatedLogs = logs.filter((log) => log.refType === 'project' && log.refId === item.id)
-    const risk = projectRisk(item, plans, today)
+    const risk = projectRisk(item, today)
     return h(Drawer, {
       title: item.name,
       subtitle: `${item.code ? `${item.code} · ` : ''}${item.module} · ${item.platform} · ${item.status}`,
@@ -970,22 +964,6 @@ function DetailDrawer({ type, item, projects, orders, plans, logs, docs, today, 
             )))
           : h('div', { className: 'pmplan-small pmplan-muted' }, '该模块下还没有工单。')
       ),
-      h(Card, { title: `计划与跟进（${relatedPlans.length}）` },
-        relatedPlans.length
-          ? h('div', { className: 'pmplan-col' }, relatedPlans.map((plan) => h('button', {
-              key: plan.id,
-              type: 'button',
-              className: 'pmplan-item',
-              onClick: () => onOpenPlan(plan.id)
-            },
-              h('span', { className: 'pmplan-item-title' }, plan.title),
-              h('span', { className: 'pmplan-item-meta' },
-                h(Badge, { tone: RISK_TONE[planRisk(plan, today)], children: planRisk(plan, today) }),
-                `${plan.status} · ${plan.progress}% · ${formatDate(plan.dueDate)}`
-              )
-            )))
-          : h('div', { className: 'pmplan-small pmplan-muted' }, '该项目还没有计划。')
-      ),
       h(Card, {
         title: `关联需求文档（${(docs || []).filter((doc) => doc.projectId === item.id).length}）`,
         actions: h(Button, { size: 'small', onClick: () => onSelectView('docs') }, '去文档页')
@@ -1012,7 +990,6 @@ function DetailDrawer({ type, item, projects, orders, plans, logs, docs, today, 
   }
 
   if (type === 'order') {
-    const relatedPlans = plans.filter((plan) => plan.orderId === item.id)
     const relatedLogs = logs.filter((log) => log.refType === 'order' && log.refId === item.id)
     const risk = orderRisk(item, today)
     return h(Drawer, {
@@ -1052,19 +1029,6 @@ function DetailDrawer({ type, item, projects, orders, plans, logs, docs, today, 
           }, stage))
         )
       ),
-      h(Card, { title: '关联计划' },
-        relatedPlans.length
-          ? h('div', { className: 'pmplan-col' }, relatedPlans.map((plan) => h('button', {
-              key: plan.id,
-              type: 'button',
-              className: 'pmplan-item',
-              onClick: () => onOpenPlan(plan.id)
-            },
-              h('span', { className: 'pmplan-item-title' }, plan.title),
-              h('span', { className: 'pmplan-item-meta' }, `${plan.status} · ${plan.progress}%`)
-            )))
-          : h('div', { className: 'pmplan-small pmplan-muted' }, '还没有关联计划。')
-      ),
       h(Card, { title: '进展记录' },
         h(LogList, { logs: relatedLogs }),
         h(LogComposer, { draft: logDraft, setDraft: setLogDraft, onSubmit: () => onAddLog('order', item.id) })
@@ -1072,13 +1036,11 @@ function DetailDrawer({ type, item, projects, orders, plans, logs, docs, today, 
     )
   }
 
-  const project = projects.find((entryItem) => entryItem.id === item.projectId)
-  const order = orders.find((entryItem) => entryItem.id === item.orderId)
   const relatedLogs = logs.filter((log) => log.refType === 'plan' && log.refId === item.id)
   const risk = planRisk(item, today)
   return h(Drawer, {
     title: item.title,
-    subtitle: `${item.status} · 进度 ${item.progress}%`,
+    subtitle: `${item.module || '未归模块'} · ${item.status}`,
     onClose,
     footer: [
       h(Button, { key: 'edit', variant: 'primary', onClick: () => onEdit(item) }, '编辑'),
@@ -1089,10 +1051,8 @@ function DetailDrawer({ type, item, projects, orders, plans, logs, docs, today, 
     h('div', { className: 'pmplan-row' },
       h(Badge, { tone: RISK_TONE[risk], children: `风险 ${risk}` }),
       h(Badge, { tone: 'info', children: item.status }),
-      project ? h(Button, { size: 'small', variant: 'ghost', onClick: () => onOpenProject(project.id) }, `项目：${project.name}`) : h(Badge, { tone: 'muted', children: '未归项目' }),
-      order ? h(Button, { size: 'small', variant: 'ghost', onClick: () => onOpenOrder(order.id) }, `工单：${order.title}`) : null
+      h(Badge, { tone: 'muted', children: `模块：${item.module || '未归模块'}` })
     ),
-    h(Progress, { value: item.progress, tone: RISK_TONE[risk] }),
     h(KeyValues, {
       rows: [
         ['负责人', item.owner || '未指派'],
@@ -1151,10 +1111,6 @@ function EditorModal({ type, form, projects, orders, moduleNames, platformNames,
       ? (draft.id ? '编辑工单' : '新建工单')
       : (draft.id ? '编辑计划' : '新建计划')
   const valid = type === 'project' ? draft.name.trim().length > 0 : draft.title.trim().length > 0
-  // 计划仍然挂在项目下，但工单只挂模块——所以「关联工单」给的是所选项目所在模块的工单。
-  const draftProject = projects.find((project) => project.id === draft.projectId)
-  const relatedOrders = draftProject ? orders.filter((order) => order.module === draftProject.module) : []
-
   const projectFields = [
     h(FieldRow, { key: 'row0' },
       h(TextField, { label: '项目编号', value: draft.code, onChange: (value) => set({ code: value }), placeholder: '例如：PRJ-2610' }),
@@ -1202,16 +1158,14 @@ function EditorModal({ type, form, projects, orders, moduleNames, platformNames,
   const planFields = [
     h(TextField, { key: 'title', label: '计划标题', value: draft.title, onChange: (value) => set({ title: value }), placeholder: '例如：与后端确认限额分级口径' }),
     h(FieldRow, { key: 'row1' },
-      h(Select, { label: '所属项目', value: draft.projectId, onChange: (value) => set({ projectId: value, orderId: '' }), options: projects.map((project) => ({ value: project.id, label: project.name })), allowEmpty: true, emptyLabel: '未归项目' }),
-      h(Select, { label: '关联工单', value: draft.orderId, onChange: (value) => set({ orderId: value }), options: relatedOrders.map((order) => ({ value: order.id, label: order.title })), allowEmpty: true, emptyLabel: '不关联' }),
+      h(Select, { label: '模块', value: draft.module, onChange: (value) => set({ module: value }), options: toOptions(withCurrent(moduleNames, draft.module)), allowEmpty: true, emptyLabel: '未归模块' }),
       h(Select, { label: '状态', value: draft.status, onChange: (value) => set({ status: value }), options: toOptions(PLAN_STATUS) })
     ),
     h(FieldRow, { key: 'row2' },
       h(TextField, { label: '负责人', value: draft.owner, onChange: (value) => set({ owner: value }) }),
       h(TextField, { label: '开始日期', type: 'date', value: draft.startedOn, onChange: (value) => set({ startedOn: value }) }),
-      h(TextField, { label: '截止日期', type: 'date', value: draft.dueDate, onChange: (value) => set({ dueDate: value }) })
+      h(TextField, { label: '投产日期', type: 'date', value: draft.dueDate, onChange: (value) => set({ dueDate: value }) })
     ),
-    h(TextField, { key: 'progress', label: '进度 %', type: 'number', min: 0, max: 100, value: draft.progress, onChange: (value) => set({ progress: value }) }),
     h(TextArea, { key: 'note', label: '备注', value: draft.note, onChange: (value) => set({ note: value }), placeholder: '产出物、依赖、风险' })
   ]
 

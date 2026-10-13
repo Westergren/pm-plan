@@ -67,7 +67,7 @@ export function weeklyReport(projects, orders, plans, today = todayISO(), option
   const to = options.to || endOfWeek(today)
   const stats = periodStats(projects, orders, plans, from, to, today)
   const data = kpis(projects, orders, plans, today)
-  const decorated = decorateProjects(projects, plans, today)
+  const decorated = decorateProjects(projects, today)
   const risks = riskItems(projects, orders, plans, today)
   const overdue = risks.filter((item) => item.risk === '已逾期')
   const blocked = decorated.filter((project) => project.risk === '阻塞')
@@ -111,7 +111,7 @@ export function weeklyReport(projects, orders, plans, today = todayISO(), option
   } else {
     lines.push(bullet(overdue, (item) => `**已逾期** ${KIND_LABEL[item.kind]}：${item.title}（${item.sourceName}｜${dueLabel(item.kind)} ${formatDate(item.dueDate)}）`, 10))
     lines.push(bullet(attention, (item) => `${riskBadge(item.risk)}${KIND_LABEL[item.kind]}：${item.title}（${item.sourceName}｜${dueLabel(item.kind)} ${formatDate(item.dueDate)}）`, 10))
-    // riskItems 的条目已经带 title/sourceName（项目与计划归项目，工单归模块），直接展开即可
+    // riskItems 的条目已经带 title/sourceName（项目归项目，工单与计划归模块），直接展开即可
   }
 
   lines.push('## 五、下周计划\n')
@@ -184,11 +184,14 @@ export function quarterlyReport(projects, orders, plans, today = todayISO(), opt
   return lines.join('\n')
 }
 
-/** 单项目状态汇报。 */
-export function projectReport(project, plans, logs, today = todayISO()) {
-  const relatedPlans = plans.filter((plan) => plan.projectId === project.id)
-  const relatedLogs = logs.filter((log) => (log.refType === 'project' && log.refId === project.id) || (log.refType === 'plan' && relatedPlans.some((plan) => plan.id === log.refId)))
-  const risk = projectRisk(project, plans, today)
+/**
+ * 单项目状态汇报。
+ *
+ * 工单与计划都已改挂模块、不再归属项目，所以项目汇报只讲项目本身与它自己的进展记录。
+ */
+export function projectReport(project, logs, today = todayISO()) {
+  const relatedLogs = logs.filter((log) => log.refType === 'project' && log.refId === project.id)
+  const risk = projectRisk(project, today)
   const lines = []
   lines.push(`# ${project.name} · 状态汇报\n`)
   lines.push(`汇报时间：${today}${project.code ? `｜项目编号：${project.code}` : ''}｜模块：${project.module || '未分类'}｜端：${project.platform}\n`)
@@ -198,14 +201,6 @@ export function projectReport(project, plans, logs, today = todayISO()) {
   if (project.link) lines.push(`- 链接：${project.link}`)
   if (project.summary) lines.push(`- 说明：${project.summary}`)
   lines.push('')
-  lines.push('## 工作计划与跟进\n')
-  lines.push(
-    bullet(
-      relatedPlans.sort((left, right) => riskRank(planRisk(left, today)) - riskRank(planRisk(right, today))),
-      (plan) => `${plan.title}（${plan.status}｜${plan.progress}%｜截止 ${formatDate(plan.dueDate)}）${riskBadge(planRisk(plan, today))}`,
-      20
-    )
-  )
   lines.push('## 最近进展\n')
   lines.push(bullet([...relatedLogs].sort((left, right) => (left.at < right.at ? 1 : -1)), (log) => `${log.at.slice(0, 10)}【${log.kind}】${log.text}`, 15))
   return lines.join('\n')
@@ -224,7 +219,7 @@ export function buildReport(kind, data, context = {}) {
   if (kind === 'project') {
     const project = data.projects.find((item) => item.id === context.projectId) || data.projects[0]
     if (!project) return '# 没有可汇报的项目\n'
-    return projectReport(project, data.plans, data.logs || [], today)
+    return projectReport(project, data.logs || [], today)
   }
   return weeklyReport(data.projects, data.orders, data.plans, today, context)
 }

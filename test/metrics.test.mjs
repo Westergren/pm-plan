@@ -40,8 +40,8 @@ const order = (patch) => ({
 })
 
 const plan = (patch) => ({
-  id: 'n1', projectId: 'p1', orderId: '', title: '确认口径', owner: '我', status: '进行中',
-  startedOn: addDays(today, -5), dueDate: addDays(today, 2), progress: 40, note: '', createdAt: '', updatedAt: '',
+  id: 'n1', module: '移动端开发', title: '确认口径', owner: '我', status: '进行中',
+  startedOn: addDays(today, -5), dueDate: addDays(today, 2), note: '', createdAt: '', updatedAt: '',
   ...patch
 })
 
@@ -72,53 +72,42 @@ test('orderRisk：完成态、逾期、优先级紧急、进度落后', () => {
   assert.equal(orderRisk(order({ dueDate: '' }), today), '未排期')
 })
 
-test('planRisk：完成态、未开始且未到开始日、逾期、进度落后', () => {
+test('planRisk：完成态、未开始且未到开始日、逾期、临近', () => {
   assert.equal(planRisk(plan({ status: '已完成' }), today), '已完成')
   assert.equal(planRisk(plan({ status: '已取消' }), today), '已完成')
   assert.equal(planRisk(plan({ status: '未开始', startedOn: addDays(today, 3), dueDate: addDays(today, 8) }), today), '正常')
   assert.equal(planRisk(plan({ dueDate: addDays(today, -1) }), today), '已逾期')
-  assert.equal(planRisk(plan({ startedOn: addDays(today, -9), dueDate: addDays(today, 1), progress: 5 }), today), '紧急')
-  assert.equal(planRisk(plan({ startedOn: addDays(today, -20), dueDate: addDays(today, 10), progress: 5 }), today), '进度风险')
+  assert.equal(planRisk(plan({ startedOn: addDays(today, -9), dueDate: addDays(today, 1) }), today), '紧急')
+  assert.equal(planRisk(plan({ startedOn: addDays(today, -9), dueDate: addDays(today, 5) }), today), '临近')
   assert.equal(planRisk(plan({ dueDate: '' }), today), '未排期')
 })
 
-test('projectRisk 取项目自身与子计划里最严重的一档', () => {
-  const healthy = project({ progress: 60 })
-  assert.equal(projectRisk(healthy, [], today), '正常')
-  const blocked = project({ status: '阻塞' })
-  assert.equal(projectRisk(blocked, [], today), '阻塞')
-  assert.equal(projectRisk(project({ status: '已完成' }), [], today), '已完成')
-  assert.equal(projectRisk(project({ dueDate: addDays(today, -2) }), [], today), '已逾期')
-  // 工单挂模块、不归项目，所以逾期工单不再影响项目风险；子计划仍然影响
-  assert.equal(projectRisk(healthy, [plan({ dueDate: '' })], today), '未排期')
-  assert.equal(projectRisk(healthy, [plan({ dueDate: addDays(today, -1) })], today), '已逾期')
-  assert.equal(projectRisk(healthy, [plan({ dueDate: addDays(today, 20), progress: 80 })], today), '正常')
-  // 别人的计划不算在自己头上
-  assert.equal(projectRisk(healthy, [plan({ projectId: 'p9', dueDate: addDays(today, -1) })], today), '正常')
-  // 没有排期的项目
-  assert.equal(projectRisk(project({ startedOn: '', dueDate: '' }), [], today), '未排期')
+test('projectRisk 只看项目自身（工单与计划都已改挂模块）', () => {
+  assert.equal(projectRisk(project({ progress: 60 }), today), '正常')
+  assert.equal(projectRisk(project({ status: '阻塞' }), today), '阻塞')
+  assert.equal(projectRisk(project({ status: '已完成' }), today), '已完成')
+  assert.equal(projectRisk(project({ dueDate: addDays(today, -2) }), today), '已逾期')
+  assert.equal(projectRisk(project({ startedOn: '', dueDate: '' }), today), '未排期')
+  // 进度落后仍然是项目自己的风险
+  assert.equal(projectRisk(project({ startedOn: addDays(today, -20), dueDate: addDays(today, 10), progress: 5 }), today), '进度风险')
 })
 
-test('decorateProjects 汇总子计划计数与需关注标记', () => {
-  const projects = [project({})]
-  const plans = [plan({ id: 'n1', dueDate: addDays(today, 30) }), plan({ id: 'n2', status: '已完成' }), plan({ id: 'n3', projectId: 'p2' })]
-  const [decorated] = decorateProjects(projects, plans, today)
-  assert.equal(decorated.planTotal, 2)
-  assert.equal(decorated.planOpen, 1)
-  assert.equal(decorated.planOverdue, 0)
+test('decorateProjects 只补风险与剩余天数，不再有工单/计划计数', () => {
+  const [decorated] = decorateProjects([project({})], today)
   assert.equal(decorated.risk, '正常')
   assert.equal(decorated.attention, false)
   assert.equal(decorated.daysLeft, 10)
-  // 子计划逾期会把项目一起拉进需关注
-  const [worried] = decorateProjects(projects, [plan({ id: 'n4', dueDate: addDays(today, -1) })], today)
-  assert.equal(worried.risk, '已逾期')
-  assert.equal(worried.attention, true)
+  assert.equal('planTotal' in decorated, false)
+  assert.equal('orderTotal' in decorated, false)
+  const [late] = decorateProjects([project({ dueDate: addDays(today, -1) })], today)
+  assert.equal(late.risk, '已逾期')
+  assert.equal(late.attention, true)
 })
 
 test('kpis 与 riskBreakdown 覆盖全部口径', () => {
   const projects = [project({ id: 'p1', progress: 40 }), project({ id: 'p2', status: '已完成', progress: 100 })]
   const orders = [order({ id: 'o1', projectId: 'p1', dueDate: addDays(today, 1) }), order({ id: 'o2', projectId: 'p1', dueDate: addDays(today, -2) })]
-  const plans = [plan({ id: 'n1', projectId: 'p1', dueDate: '' })]
+  const plans = [plan({ id: 'n1', dueDate: '' })]
   const data = kpis(projects, orders, plans, today)
   assert.equal(data.projects, 2)
   assert.equal(data.active, 1)
@@ -153,7 +142,7 @@ test('riskItems / todayBuckets 把工单、计划、项目统一成可排序条�
 test('statusColumns / platformLoad / ownerWorkload 聚合正确', () => {
   const projects = [project({ id: 'p1', owner: '我' }), project({ id: 'p2', owner: '张三', platform: '小程序', status: '阻塞' })]
   const orders = [order({ id: 'o1', projectId: 'p1', owner: '我' }), order({ id: 'o2', projectId: 'p2', owner: '张三', stage: '待上线' })]
-  const columns = statusColumns(projects, orders, [], today)
+  const columns = statusColumns(projects, today)
   assert.equal(columns.find((column) => column.status === '进行中').count, 1)
   assert.equal(columns.find((column) => column.status === '阻塞').count, 1)
   const platforms = platformLoad(projects, orders, today)

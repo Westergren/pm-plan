@@ -7,7 +7,6 @@ import {
   SMART_VIEWS,
   applyView,
   attachModuleName,
-  attachProjectName,
   groupByModule,
   groupByPlatform,
   moduleOf,
@@ -37,8 +36,8 @@ const order = (patch) => ({
 })
 
 const plan = (patch) => ({
-  id: 'n1', projectId: 'p1', orderId: '', title: '确认口径', owner: '我', status: '进行中',
-  startedOn: addDays(today, -2), dueDate: addDays(today, 1), progress: 30, note: '', createdAt: '', updatedAt: '',
+  id: 'n1', module: '移动端开发', title: '确认口径', owner: '我', status: '进行中',
+  startedOn: addDays(today, -2), dueDate: addDays(today, 1), note: '', createdAt: '', updatedAt: '',
   ...patch
 })
 
@@ -69,7 +68,7 @@ test('moduleOptions / platformOptions / targetOptions 并入配置与历史取�
 test('applyView：view 为空不做状态过滤，smart 视图各自过滤', () => {
   const projects = [project({ id: 'p1' }), project({ id: 'p2', status: '已完成' }), project({ id: 'p3', dueDate: addDays(today, -2) })]
   const orders = [order({ id: 'o1' }), order({ id: 'o2', dueDate: addDays(today, -1) })]
-  const plans = [plan({ id: 'n1', projectId: 'p1', dueDate: addDays(today, 1) })]
+  const plans = [plan({ id: 'n1', dueDate: addDays(today, 1) })]
 
   // 不传 view 是项目/工单页的默认口径：全量保留，已完成的项目也在列表里。
   // 这两个页面不再摆智能视图筛选项，默认口径就不能自带任何状态过滤。
@@ -94,7 +93,7 @@ test('applyView：view 为空不做状态过滤，smart 视图各自过滤', () 
   const week = applyView(projects, orders, plans, { view: 'week' }, today)
   assert.ok(week.orders.every((item) => item.dueDate >= today))
 
-  const unscheduled = applyView([project({ id: 'p9', startedOn: '', dueDate: '' })], [order({ module: '移动端开发', dueDate: '' })], [plan({ projectId: 'p9', dueDate: '' })], { view: 'unscheduled' }, today)
+  const unscheduled = applyView([project({ id: 'p9', startedOn: '', dueDate: '' })], [order({ module: '移动端开发', dueDate: '' })], [plan({ dueDate: '' })], { view: 'unscheduled' }, today)
   assert.equal(unscheduled.projects.length, 1)
   assert.equal(unscheduled.orders.length, 1)
   assert.equal(unscheduled.plans.length, 1)
@@ -103,11 +102,13 @@ test('applyView：view 为空不做状态过滤，smart 视图各自过滤', () 
 test('applyView：模块、平台与关键词筛选', () => {
   const projects = [project({ id: 'p1' }), project({ id: 'p2', module: '日常工作', platform: '小程序', name: '周例会' })]
   const orders = [order({ id: 'o1' }), order({ id: 'o2', module: '日常工作', title: '例会纪要', description: '' })]
-  const plans = [plan({ id: 'n1', projectId: 'p1' }), plan({ id: 'n2', projectId: 'p2', title: '整理周报' })]
+  const plans = [plan({ id: 'n1' }), plan({ id: 'n2', module: '日常工作', title: '整理周报' })]
 
   const byModule = applyView(projects, orders, plans, { moduleId: '日常工作' }, today)
   assert.deepEqual(byModule.projects.map((item) => item.id), ['p2'])
   assert.deepEqual(byModule.orders.map((item) => item.id), ['o2'])
+  // 计划也直接挂模块，所以模块筛选对它同样生效
+  assert.deepEqual(byModule.plans.map((item) => item.id), ['n2'])
 
   const byPlatform = applyView(projects, orders, plans, { platform: '移动手机' }, today)
   assert.deepEqual(byPlatform.projects.map((item) => item.id), ['p1'])
@@ -115,6 +116,7 @@ test('applyView：模块、平台与关键词筛选', () => {
   const byKeyword = applyView(projects, orders, plans, { search: '例会' }, today)
   assert.deepEqual(byKeyword.projects.map((item) => item.id), ['p2'])
   assert.ok(byKeyword.orders.some((item) => item.id === 'o2'))
+  assert.deepEqual(byKeyword.plans, [], '计划按自己的标题与模块匹配，不再跟着命中项目走')
 
   const none = applyView(projects, orders, plans, { search: '不存在的关键词' }, today)
   assert.equal(none.projects.length, 0)
@@ -125,7 +127,7 @@ test('applyView：模块、平台与关键词筛选', () => {
 test('applyView：目标端只筛工单，不动项目与计划', () => {
   const projects = [project({ id: 'p1' }), project({ id: 'p2' })]
   const orders = [order({ id: 'o1', target: '移动手机' }), order({ id: 'o2', module: '日常工作', target: '车机' })]
-  const plans = [plan({ id: 'n1', projectId: 'p1' })]
+  const plans = [plan({ id: 'n1' })]
 
   const scoped = applyView(projects, orders, plans, { target: '车机' }, today)
   assert.deepEqual(scoped.orders.map((item) => item.id), ['o2'])
@@ -136,7 +138,7 @@ test('applyView：目标端只筛工单，不动项目与计划', () => {
 test('projectSmartCounts / orderSmartCounts 覆盖全部智能视图且口径各自独立', () => {
   const projects = [project({ id: 'p1' }), project({ id: 'p2', status: '已完成' })]
   const orders = [order({ id: 'o1' }), order({ id: 'o2', stage: '已上线' })]
-  const plans = [plan({ id: 'n1', projectId: 'p1' })]
+  const plans = [plan({ id: 'n1' })]
   const today2 = '2026-10-10'
 
   const projects2 = projectSmartCounts(projects, orders, plans, {}, today2)
@@ -158,11 +160,11 @@ test('projectSmartCounts / orderSmartCounts 覆盖全部智能视图且口径各
 
 test('groupByModule / groupByPlatform 分区且按风险排序', () => {
   const projects = [project({ id: 'p1' }), project({ id: 'p2', status: '阻塞' }), project({ id: 'p3', module: '日常工作', platform: '小程序' })]
-  const modules = groupByModule(projects, [], [], today)
+  const modules = groupByModule(projects, [], today)
   const mobile = modules.find((group) => group.module === '移动端开发')
   assert.equal(mobile.count, 2)
   assert.equal(mobile.items[0].id, 'p2')
-  const platforms = groupByPlatform(projects, [], [], today)
+  const platforms = groupByPlatform(projects, [], today)
   assert.ok(platforms.some((group) => group.platform === '小程序'))
 })
 
@@ -170,15 +172,15 @@ test('groupByModule / groupByPlatform 跟随配置，并保留配置外的历史
   const projects = [project({ id: 'p1', module: '自研', platform: '车机' })]
 
   // 配置里没有的取值不能被丢掉，否则改配置后旧项目会从界面上消失
-  const modules = groupByModule(projects, [], [], today, ['移动端开发'])
+  const modules = groupByModule(projects, [], today, ['移动端开发'])
   assert.deepEqual(modules.map((group) => group.module), ['自研'])
   assert.equal(modules[0].count, 1)
 
-  const platforms = groupByPlatform(projects, [], [], today, ['移动手机'])
+  const platforms = groupByPlatform(projects, [], today, ['移动手机'])
   assert.deepEqual(platforms.map((group) => group.platform), ['车机'])
 
   // 空分组不进看板：项目页本来也不该出现 0 条的模块
-  const empty = groupByModule([], [], [], today, ['移动端开发', '日常工作'])
+  const empty = groupByModule([], [], today, ['移动端开发', '日常工作'])
   assert.deepEqual(empty, [])
 })
 
@@ -188,28 +190,28 @@ test('sortOrders / sortPlans 支持多种排序', () => {
   assert.equal(sortOrders(orders, today, 'due')[0].id, 'o2')
   assert.equal(sortOrders(orders, today, 'priority')[0].id, 'o2')
   assert.equal(sortOrders(orders, today, 'risk')[0].id, 'o2')
-  // 工单不再显示归属项目，而是它挂的模块
+  // 工单与计划都不再显示归属项目，而是它们挂的模块
   assert.equal(attachModuleName(orders)[0].moduleName, '移动端开发')
   assert.equal(attachModuleName([order({ module: '' })])[0].moduleName, '未归模块')
-  assert.equal(attachProjectName([plan({})], projects)[0].projectName, '手机银行迭代')
+  assert.equal(attachModuleName([plan({})])[0].moduleName, '移动端开发')
+  assert.equal(attachModuleName([plan({ module: '' })])[0].moduleName, '未归模块')
   const plans = [plan({ id: 'n1', dueDate: addDays(today, 9) }), plan({ id: 'n2', dueDate: addDays(today, 1) })]
-  assert.equal(sortPlans(plans, projects, today, 'due')[0].id, 'n2')
-  assert.equal(sortPlans(plans, projects, today, 'risk')[0].id, 'n2')
+  assert.equal(sortPlans(plans, today, 'due')[0].id, 'n2')
+  assert.equal(sortPlans(plans, today, 'risk')[0].id, 'n2')
   const donePlan = plan({ id: 'n3', status: '已完成', dueDate: addDays(today, 40) })
-  assert.equal(sortPlans([...plans, donePlan], projects, today, 'risk').some((item) => item.id === 'n3'), true)
+  assert.equal(sortPlans([...plans, donePlan], today, 'risk').some((item) => item.id === 'n3'), true)
 })
 
 test('weekBoard 把工单与计划落到周一到周日', () => {
-  const projects = [project({})]
   const orders = [order({ id: 'o1', dueDate: '2026-10-12' })]
   const plans = [plan({ id: 'n1', dueDate: '2026-10-15' })]
-  const board = weekBoard(orders, plans, projects, today)
+  const board = weekBoard(orders, plans, today)
   assert.equal(board.start, '2026-10-05')
   assert.equal(board.end, '2026-10-11')
   assert.equal(board.days.length, 7)
   const monday = board.days.find((day) => day.date === '2026-10-12')
   assert.equal(monday, undefined)
-  const next = weekBoard(orders, plans, projects, '2026-10-12')
+  const next = weekBoard(orders, plans, '2026-10-12')
   assert.equal(next.start, '2026-10-12')
   assert.equal(next.days[0].items.length, 1)
   assert.equal(next.days[3].items.length, 1)

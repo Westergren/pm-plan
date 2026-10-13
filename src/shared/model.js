@@ -7,12 +7,13 @@
  *   config:   { modules: [名称], platforms: [名称] },   // 用户可在「设置」里增删改，缺字段时回落到 DEFAULT_*
  *   projects: [{ id, code, name, module, platform, status, owner, startedOn, dueDate, progress, link, summary, tags, createdAt, updatedAt }],
  *   orders:   [{ id, code, module, title, kind, priority, stage, owner, target, dueDate, createdOn, description, createdAt, updatedAt }],
- *   plans:    [{ id, projectId, orderId, title, owner, status, startedOn, dueDate, progress, note, createdAt, updatedAt }],
+ *   plans:    [{ id, module, title, owner, status, startedOn, dueDate, note, createdAt, updatedAt }],
  *   logs:     [{ id, refType, refId, at, kind, text }]
  * }
  *
- * 工单不再归属某个项目，而是直接挂「模块」（order.module）。存量数据里的
- * `order.projectId` 只在收敛时用来推导模块，收敛后不再保留该字段。
+ * 工单与计划都不再归属某个项目，而是直接挂「模块」（order.module / plan.module）。
+ * 存量数据里的 `order.projectId` 与 `plan.projectId` 只在收敛时用来推导模块，
+ * 收敛后不再保留这两个字段；计划也一并去掉了 `orderId` 与 `progress`。
  */
 
 export const STATE_VERSION = 1
@@ -237,17 +238,16 @@ export function normalizeState(raw, { now = new Date().toISOString() } = {}) {
     if (planIds.has(id)) continue
     planIds.add(id)
     const projectId = asText(item.projectId).trim()
-    const orderId = asText(item.orderId).trim()
+    const moduleValue = asText(item.module).trim().slice(0, MAX_DIMENSION_LENGTH)
     plans.push({
       id,
-      projectId: projectIds.has(projectId) ? projectId : '',
-      orderId: orderIds.has(orderId) ? orderId : '',
+      // 存量计划没有 module：按它原先所属项目的模块迁移；项目已不在时留空（界面显示「未归模块」）。
+      module: moduleValue || projectModules.get(projectId) || '',
       title,
       owner: asText(item.owner).trim().slice(0, 40) || '我',
       status: asEnum(item.status, PLAN_STATUS, '未开始'),
       startedOn: asDate(item.startedOn),
       dueDate: asDate(item.dueDate),
-      progress: asProgress(item.progress, 0),
       note: asText(item.note).slice(0, 2000),
       createdAt: asStamp(item.createdAt, now),
       updatedAt: asStamp(item.updatedAt, now)
@@ -288,11 +288,6 @@ export function normalizeState(raw, { now = new Date().toISOString() } = {}) {
   }
 }
 
-/** 某个项目下未完成的计划数。 */
-export function openPlansOf(plans, projectId) {
-  return plans.filter((plan) => plan.projectId === projectId && !DONE_PLAN_STATUS.includes(plan.status))
-}
-
 export function byId(list, id) {
   return list.find((item) => item.id === id) || null
 }
@@ -301,16 +296,4 @@ export function nextStage(stage) {
   const index = STAGE_FLOW.indexOf(stage)
   if (index < 0 || index >= STAGE_FLOW.length - 1) return ''
   return STAGE_FLOW[index + 1]
-}
-
-/**
- * 由项目下已完成计划的占比推导进度建议值（用于一键同步）。
- *
- * 工单已不归属项目，所以这里**只看计划**；曾经按 projectId 汇总工单的那套逻辑随本次改造移除。
- */
-export function suggestedProgress(project, plans) {
-  const relatedPlans = plans.filter((plan) => plan.projectId === project.id)
-  if (!relatedPlans.length) return project.progress
-  const donePlans = relatedPlans.filter((plan) => plan.status === '已完成').length
-  return Math.round((donePlans / relatedPlans.length) * 100)
 }

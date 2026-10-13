@@ -9,8 +9,7 @@ import {
   createId,
   emptyState,
   nextStage,
-  normalizeState,
-  suggestedProgress
+  normalizeState
 } from '../src/shared/model.js'
 
 test('createId 生成唯一且带前缀的 id', () => {
@@ -91,7 +90,13 @@ test('normalizeState 丢弃脏数据、补默认值、统一枚举', () => {
 
   assert.equal(state.plans.length, 2)
   assert.equal(state.plans[0].status, '未开始')
-  assert.equal(state.plans[0].progress, 0)
+  // 计划也改挂模块：去掉 projectId / orderId / progress，存量按原项目的模块迁移
+  assert.equal(state.plans[0].projectId, undefined)
+  assert.equal(state.plans[0].orderId, undefined)
+  assert.equal(state.plans[0].progress, undefined)
+  assert.equal(state.plans[0].module, '公司项目')
+  // 原项目已经不存在（ghost）时留空，界面显示「未归模块」
+  assert.equal(state.plans[1].module, '')
 
   assert.equal(state.logs.length, 2)
   assert.ok(state.logs.every((log) => log.id))
@@ -103,25 +108,20 @@ test('normalizeState 结果稳定：二次收敛不改变数据', () => {
   const once = normalizeState({
     projects: [{ id: 'p1', name: 'A', progress: 30 }],
     orders: [{ id: 'o1', projectId: 'p1', title: 'B' }],
-    plans: [{ id: 'n1', projectId: 'p1', orderId: 'o1', title: 'C' }],
+    plans: [{ id: 'n1', projectId: 'p1', orderId: 'o1', title: 'C', module: '甲' }],
     logs: [{ refType: 'project', refId: 'p1', text: 'D' }]
   })
   const twice = normalizeState(once)
   assert.deepEqual(twice, once)
 })
 
-test('emptyState / nextStage / suggestedProgress', () => {
+test('emptyState / nextStage', () => {
   assert.equal(emptyState().version, 1)
   assert.equal(nextStage('开发中'), '联调中')
   assert.equal(nextStage('已上线'), '')
   assert.equal(nextStage('不存在'), '')
   assert.ok(DEFAULT_MODULES.includes('移动端开发'))
   assert.equal(ORDER_STAGES.length, 8)
-
-  const project = { id: 'p1', progress: 20 }
-  const plans = [{ projectId: 'p1', status: '已完成' }, { projectId: 'p1', status: '进行中' }]
-  assert.equal(suggestedProgress(project, plans), 50)
-  assert.equal(suggestedProgress(project, []), 20)
 })
 
 test('仓库里没有把业务数据写死在客户端入口', async () => {

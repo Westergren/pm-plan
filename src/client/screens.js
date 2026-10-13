@@ -148,13 +148,13 @@ export function OverviewScreen(props) {
   const [question, setQuestion] = useState('')
   const [answer, setAnswer] = useState('')
   const breakdown = riskBreakdown(scoped.projects, scoped.orders, scoped.plans, today)
-  const modules = groupByModule(scoped.projects, scoped.orders, scoped.plans, today, moduleNames)
+  const modules = groupByModule(scoped.projects, scoped.orders, today, moduleNames)
   const platforms = platformLoad(scoped.projects, scoped.orders, today, platformNames)
   const owners = ownerWorkload(scoped.projects, scoped.orders, scoped.plans, today)
-  const board = weekBoard(scoped.orders, scoped.plans, scoped.projects, today)
+  const board = weekBoard(scoped.orders, scoped.plans, today)
   const buckets = todayBuckets(scoped.projects, scoped.orders, scoped.plans, today)
   const handlers = { onOpenProject, onOpenOrder, onOpenPlan }
-  const decorated = scoped.projects.map((project) => ({ ...project, risk: projectRisk(project, plans, today) }))
+  const decorated = scoped.projects.map((project) => ({ ...project, risk: projectRisk(project, today) }))
 
   const ask = () => {
     const keyword = question.trim().toLowerCase()
@@ -344,10 +344,10 @@ export function ProjectsScreen(props) {
   const [grouping, setGrouping] = useState('module')
   const [expanded, setExpanded] = useState('')
   const groups = grouping === 'platform'
-    ? groupByPlatform(scoped.projects, scoped.orders, scoped.plans, today, platformNames)
+    ? groupByPlatform(scoped.projects, scoped.orders, today, platformNames)
     : grouping === 'status'
-      ? statusColumns(scoped.projects, scoped.plans, today).map((column) => ({ module: column.status, items: column.items, orders: [], count: column.count, orderCount: 0 }))
-      : groupByModule(scoped.projects, scoped.orders, scoped.plans, today, moduleNames)
+      ? statusColumns(scoped.projects, today).map((column) => ({ module: column.status, items: column.items, orders: [], count: column.count, orderCount: 0 }))
+      : groupByModule(scoped.projects, scoped.orders, today, moduleNames)
 
   const visible = groups.filter((group) => group.count)
 
@@ -435,9 +435,6 @@ export function ProjectsScreen(props) {
                 h('div', { className: 'pmplan-row', style: { marginTop: 6 } },
                   h('span', { style: { flex: '1 1 auto' } }, h(Progress, { value: project.progress, tone: toneOf(project.risk) })),
                   h('span', { className: 'pmplan-small pmplan-nums' }, `${project.progress}%`)
-                ),
-                h('div', { className: 'pmplan-row pmplan-small pmplan-muted' },
-                  `计划 ${project.planOpen}/${project.planTotal} 未完成`
                 ),
                 h('div', { className: 'pmplan-row', style: { marginTop: 8 } },
                   h(Button, { size: 'small', onClick: () => onEditProject(project) }, '编辑'),
@@ -557,10 +554,10 @@ export function OrdersScreen(props) {
 /* ---------------- 计划 ---------------- */
 
 export function PlansScreen(props) {
-  const { scoped, projects, today, onOpenPlan, onEditPlan, onDelete, onTogglePlan } = props
+  const { scoped, today, onOpenPlan, onEditPlan, onDelete, onTogglePlan } = props
   const [mode, setMode] = useState('table')
   const [sortMode, setSortMode] = useState('risk')
-  const rows = sortPlans(scoped.plans, projects, today, sortMode)
+  const rows = sortPlans(scoped.plans, today, sortMode)
   const buckets = PLAN_STATUS.map((status) => ({ status, items: rows.filter((plan) => plan.status === status) }))
 
   return [
@@ -592,11 +589,10 @@ export function PlansScreen(props) {
               h('thead', null, h('tr', null,
                 h('th', null, '完成'),
                 h('th', null, '计划'),
-                h('th', null, '项目'),
+                h('th', null, '模块'),
                 h('th', null, '状态'),
-                h('th', null, '进度'),
                 h('th', null, '负责人'),
-                h('th', null, '截止'),
+                h('th', null, '投产日期'),
                 h('th', null, '风险'),
                 h('th', { className: 'pmplan-cell-actions' }, '操作')
               )),
@@ -610,14 +606,8 @@ export function PlansScreen(props) {
                 h('td', { className: 'pmplan-title-cell' },
                   h('button', { type: 'button', className: 'pmplan-btn', 'data-variant': 'ghost', style: { padding: 0 }, onClick: () => onOpenPlan(plan.id) }, plan.title)
                 ),
-                h('td', { className: 'pmplan-muted' }, plan.projectName),
+                h('td', { className: 'pmplan-muted' }, plan.moduleName),
                 h('td', null, h(Badge, { tone: plan.status === '已完成' ? 'ok' : plan.status === '进行中' ? 'info' : 'muted', children: plan.status })),
-                h('td', { style: { width: 120 } },
-                  h('div', { className: 'pmplan-row' },
-                    h(Progress, { value: plan.progress, tone: toneOf(plan.risk) }),
-                    h('span', { className: 'pmplan-small pmplan-nums' }, `${plan.progress}%`)
-                  )
-                ),
                 h('td', { className: 'pmplan-muted' }, plan.owner || '未指派'),
                 h('td', { className: 'pmplan-nums' }, formatDate(plan.dueDate, '未排期')),
                 h('td', null, h(Badge, { tone: toneOf(plan.risk), children: plan.risk })),
@@ -638,12 +628,12 @@ export function PlansScreen(props) {
               h('div', { className: 'pmplan-board-body' },
                 bucket.items.length
                   ? bucket.items.map((plan) => h('div', { className: 'pmplan-item', key: plan.id },
-                      h('button', { type: 'button', className: 'pmplan-btn', 'data-variant': 'ghost', style: { padding: 0, textAlign: 'left' }, onClick: () => onOpenPlan(plan.id) },
+                      h('button', { type: 'button', className: 'pmplan-btn pmplan-btn-block', 'data-variant': 'ghost', style: { padding: 0, textAlign: 'left' }, onClick: () => onOpenPlan(plan.id) },
                         h('span', { className: 'pmplan-item-title' }, plan.title)
                       ),
                       h('span', { className: 'pmplan-item-meta' },
                         h(Badge, { tone: toneOf(plan.risk), children: plan.risk }),
-                        plan.projectName
+                        plan.moduleName
                       ),
                       h('span', { className: 'pmplan-small pmplan-muted' }, `${formatDate(plan.dueDate, '未排期')} · ${plan.owner || '未指派'}`)
                     ))
@@ -657,9 +647,8 @@ export function PlansScreen(props) {
 /* ---------------- 日历 ---------------- */
 
 export function CalendarScreen(props) {
-  const { scoped, projects, orders, plans, today, onOpenProject, onOpenOrder, onOpenPlan, calendarMonth, setCalendarMonth } = props
+  const { scoped, projects, orders, today, onOpenProject, onOpenOrder, onOpenPlan, calendarMonth, setCalendarMonth } = props
   const grid = monthGrid(calendarMonth)
-  const names = new Map(projects.map((project) => [project.id, project.name]))
   const items = new Map()
   const push = (date, item) => {
     if (!date) return
@@ -668,7 +657,7 @@ export function CalendarScreen(props) {
   }
   for (const plan of scoped.plans) {
     if (plan.status === '已完成' || plan.status === '已取消' || !plan.dueDate) continue
-    push(plan.dueDate, { kind: 'plan', id: plan.id, title: plan.title, risk: planRisk(plan, today), sourceName: names.get(plan.projectId) || '未归项目' })
+    push(plan.dueDate, { kind: 'plan', id: plan.id, title: plan.title, risk: planRisk(plan, today), sourceName: plan.module || '未归模块' })
   }
   for (const order of scoped.orders) {
     if (order.stage === '已上线' || order.stage === '已取消' || !order.dueDate) continue
@@ -676,7 +665,7 @@ export function CalendarScreen(props) {
   }
   for (const project of scoped.projects) {
     if (project.status === '已完成' || !project.dueDate) continue
-    push(project.dueDate, { kind: 'project', id: project.id, title: `投产：${project.name}`, risk: projectRisk(project, plans, today), sourceName: project.name })
+    push(project.dueDate, { kind: 'project', id: project.id, title: `投产：${project.name}`, risk: projectRisk(project, today), sourceName: project.name })
   }
 
   return [

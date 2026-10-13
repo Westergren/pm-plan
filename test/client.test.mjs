@@ -70,7 +70,7 @@ test('各业务页签在有数据时都能渲染出内容', async () => {
     logs: state.logs,
     config: state.config,
     scoped,
-    decorated: screens.decorateProjects(state.projects, state.orders, state.plans, today),
+    decorated: screens.decorateProjects(state.projects, state.plans, today),
     stats: screens.kpis(state.projects, state.orders, state.plans, today),
     summaryLine: '测试用一句话结论',
     moduleNames,
@@ -613,6 +613,101 @@ test('jsdom 挂载：项目表单有项目编号与投产日期，没有截止�
       assert.ok(dialog.textContent.includes(label), `项目表单缺少「${label}」`)
     }
     assert.ok(!dialog.textContent.includes('截止日期'), '项目表单不该再叫「截止日期」')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：计划页显示模块与投产日期，没有进度列', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    const tab = (label) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === label)
+    await panel.act(() => click(tab('计划')))
+    const headers = [...panel.document.querySelectorAll('thead th')].map((node) => node.textContent)
+    assert.deepEqual(headers, ['完成', '计划', '模块', '状态', '负责人', '投产日期', '风险', '操作'])
+    assert.ok(!panel.document.body.textContent.includes('进度'), '计划页不该再有进度')
+    assert.ok(panel.document.body.textContent.includes('移动端开发'), '计划列表没有显示模块名')
+
+    // 切到看板：卡片标题必须允许换行（不用 nowrap 的 .pmplan-btn），副标题显示模块名
+    const boardToggle = [...panel.document.querySelectorAll('button')].find((node) => node.textContent === '看板')
+    assert.ok(boardToggle, '没有看板切换按钮')
+    await panel.act(() => click(boardToggle))
+    const cards = [...panel.document.querySelectorAll('.pmplan-board .pmplan-btn-block')]
+    assert.ok(cards.length > 0, '计划看板卡片标题没有使用可换行的按钮样式')
+    assert.ok(cards[0].closest('.pmplan-board-col').textContent.includes('移动端开发'), '看板卡片没有显示模块名')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：计划表单挂模块、去掉所属项目与关联工单，截止改投产日期且没有进度', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    const button = [...panel.document.querySelectorAll('button')].find((node) => node.textContent === '新建计划')
+    await panel.act(() => click(button))
+    const dialog = panel.document.querySelector('[role="dialog"]')
+    assert.ok(dialog, '没有打开计划弹窗')
+    for (const label of ['模块', '投产日期']) {
+      assert.ok(dialog.textContent.includes(label), `计划表单缺少「${label}」`)
+    }
+    for (const label of ['所属项目', '关联工单', '进度', '截止日期']) {
+      assert.ok(!dialog.textContent.includes(label), `计划表单不该再有「${label}」`)
+    }
+    assert.ok(dialog.textContent.includes('未归模块'), '模块下拉应允许留空')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：计划详情显示模块，没有进度', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    const tab = (label) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === label)
+    await panel.act(() => click(tab('计划')))
+    const titleButton = [...panel.document.querySelectorAll('.pmplan-table .pmplan-title-cell button')]
+      .find((node) => node.textContent === '与后端确认限额分级口径')
+    assert.ok(titleButton, '没有找到示例计划')
+    await panel.act(() => click(titleButton))
+    const drawer = panel.document.querySelector('[role="dialog"]')
+    assert.ok(drawer, '没有打开计划抽屉')
+    assert.ok(drawer.textContent.includes('模块：'), '计划详情没有显示模块')
+    assert.ok(!drawer.textContent.includes('进度'), '计划详情不该再显示进度')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：删掉项目不会连带删掉挂在同一模块上的计划', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    const before = panel.fake.memory.state
+    const target = before.projects.find((project) => project.name === '手机银行 6.2 版本迭代')
+    assert.ok(target, '没有找到示例项目')
+    assert.ok(before.plans.length > 0, '示例数据里应有计划')
+
+    const tab = (label) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === label)
+    await panel.act(() => click(tab('项目')))
+    const cardButton = [...panel.document.querySelectorAll('button')].find((node) => node.textContent === target.name)
+    await panel.act(() => click(cardButton))
+    const drawer = panel.document.querySelector('[role="dialog"]')
+    assert.ok(drawer, '没有打开项目抽屉')
+    assert.ok(!drawer.textContent.includes('计划与跟进'), '项目抽屉不该再列计划')
+
+    const del = [...drawer.querySelectorAll('button')].find((node) => node.textContent === '删除')
+    await panel.act(() => click(del))
+    const confirmDialog = [...panel.document.querySelectorAll('[role="dialog"]')].pop()
+    assert.ok(confirmDialog.textContent.includes('计划'), '确认文案没有说明计划不受影响')
+    const ok = [...confirmDialog.querySelectorAll('button')].find((node) => node.textContent === '确认执行')
+    await panel.act(() => click(ok))
+    await panel.flush(600)
+
+    const after = panel.fake.memory.state
+    assert.equal(after.projects.some((project) => project.id === target.id), false, '项目没有被删除')
+    assert.equal(after.plans.length, before.plans.length, '计划被连带删掉了')
   } finally {
     await panel.cleanup()
   }

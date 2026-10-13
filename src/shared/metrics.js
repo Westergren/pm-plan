@@ -127,19 +127,17 @@ export function planRisk(plan, today = todayISO()) {
   const byDate = dateRiskLevel(plan.dueDate, today)
   if (byDate === '已逾期') return '已逾期'
   if (byDate === '紧急') return '紧急'
-  const ratio = timeRatio(plan.startedOn, plan.dueDate, today)
-  if (ratio !== null && ratio - plan.progress >= 30) return '进度风险'
   if (byDate === '临近') return '临近'
   if (!plan.dueDate) return plan.status === '进行中' ? '未排期' : '未排期'
   return '正常'
 }
 
 /**
- * 项目风险：项目自身截止 + 其下未结束计划里最严重的一档。
+ * 项目风险：只看项目自身（状态 + 截止 + 进度滞后）。
  *
- * 工单已不归属项目（改挂模块），所以不再参与项目风险的汇总。
+ * 工单与计划都已改挂模块、不再归属项目，所以它们都不再参与项目风险的汇总。
  */
-export function projectRisk(project, plans = [], today = todayISO()) {
+export function projectRisk(project, today = todayISO()) {
   if (isProjectDone(project)) return '已完成'
   if (project.status === '阻塞') return '阻塞'
   const levels = []
@@ -148,10 +146,6 @@ export function projectRisk(project, plans = [], today = todayISO()) {
   if (project.status !== '待启动' && project.status !== '暂停' && project.dueDate) {
     const ratio = timeRatio(project.startedOn, project.dueDate, today)
     if (ratio !== null && ratio - project.progress >= 30) levels.push('进度风险')
-  }
-  for (const plan of plans) {
-    if (plan.projectId !== project.id || isPlanDone(plan)) continue
-    levels.push(planRisk(plan, today))
   }
   let worst = '正常'
   for (const level of levels) {
@@ -171,27 +165,24 @@ export function needsAttention(level) {
 }
 
 /**
- * 给项目补上风险与统计。工单不归属项目，所以这里只有计划口径；
- * 「工单 X/Y 未结束」这类跨归属的汇总随本次改造移除。
+ * 给项目补上风险与剩余天数。
+ *
+ * 工单与计划都已改挂模块、不再归属项目，所以这里不再有「工单/计划 X/Y 未结束」这类汇总。
  */
-export function decorateProjects(projects, plans, today = todayISO()) {
+export function decorateProjects(projects, today = todayISO()) {
   return projects.map((project) => {
-    const relatedPlans = plans.filter((plan) => plan.projectId === project.id)
-    const risk = projectRisk(project, relatedPlans, today)
+    const risk = projectRisk(project, today)
     return {
       ...project,
       risk,
       attention: needsAttention(risk),
-      planTotal: relatedPlans.length,
-      planOpen: relatedPlans.filter((plan) => !isPlanDone(plan)).length,
-      planOverdue: relatedPlans.filter((plan) => planRisk(plan, today) === '已逾期').length,
       daysLeft: project.dueDate ? daysBetween(today, project.dueDate) : null
     }
   })
 }
 
 export function kpis(projects, orders, plans, today = todayISO()) {
-  const decorated = decorateProjects(projects, plans, today)
+  const decorated = decorateProjects(projects, today)
   const active = decorated.filter((project) => !isProjectDone(project))
   const openOrders = orders.filter((order) => !isOrderDone(order))
   const openPlans = plans.filter((plan) => !isPlanDone(plan))
@@ -217,7 +208,7 @@ export function kpis(projects, orders, plans, today = todayISO()) {
 
 export function riskBreakdown(projects, orders, plans, today = todayISO()) {
   const counts = new Map(RISK_LEVELS.map((level) => [level, 0]))
-  for (const project of decorateProjects(projects, plans, today)) {
+  for (const project of decorateProjects(projects, today)) {
     counts.set(project.risk, (counts.get(project.risk) || 0) + 1)
   }
   return RISK_LEVELS.map((level) => ({ level, count: counts.get(level) || 0, tone: riskTone(level) }))
@@ -280,8 +271,8 @@ export function ownerWorkload(projects, orders, plans, today = todayISO()) {
 }
 
 /** 按状态分列的项目看板。 */
-export function statusColumns(projects, plans, today = todayISO()) {
-  const decorated = decorateProjects(projects, plans, today)
+export function statusColumns(projects, today = todayISO()) {
+  const decorated = decorateProjects(projects, today)
   return PROJECT_STATUS.map((status) => {
     const items = decorated
       .filter((project) => project.status === status)
@@ -305,13 +296,12 @@ export function orderBoardColumns(orders, today = todayISO()) {
 /**
  * 全部需要盯的条目，统一成一条，便于「风险中心」与「今天做什么」。
  *
- * 每条带一个 `sourceName` 表示**归属**：项目与计划归项目，工单归模块。
- * `projectId` 只在真的挂了项目时才给（工单没有）。
+ * 每条带一个 `sourceName` 表示**归属**：项目归项目，工单与计划归模块。
+ * `projectId` 只在真的挂了项目时才给（工单与计划都没有）。
  */
 export function riskItems(projects, orders, plans, today = todayISO()) {
-  const projectName = new Map(projects.map((project) => [project.id, project.name]))
   const items = []
-  for (const project of decorateProjects(projects, plans, today)) {
+  for (const project of decorateProjects(projects, today)) {
     if (!project.attention) continue
     items.push({
       kind: 'project',
@@ -349,24 +339,23 @@ export function riskItems(projects, orders, plans, today = todayISO()) {
       kind: 'plan',
       id: plan.id,
       title: plan.title,
-      subtitle: `${plan.status} · 进度 ${plan.progress}%`,
+      subtitle: `${plan.status} · 计划`,
       owner: plan.owner,
       dueDate: plan.dueDate,
       risk,
       tone: riskTone(risk),
-      projectId: plan.projectId,
-      sourceName: projectName.get(plan.projectId) || '未归项目'
+      projectId: '',
+      sourceName: plan.module || '未归模块'
     })
   }
   return items.sort((left, right) => riskRank(left.risk) - riskRank(right.risk) || (left.dueDate || '9999').localeCompare(right.dueDate || '9999'))
 }
 
 /**
- * 甘特：项目一行（子条是它的计划），工单各自成行——工单改挂模块后不再挂在项目下面。
- * `sourceName` 同样是归属名（工单→模块，项目/计划→项目），`projectId` 只在有项目时给。
+ * 甘特：项目一行、工单一行、计划一行——工单与计划都改挂模块，不再挂在项目下面。
+ * `sourceName` 是归属名（工单/计划→模块，项目→项目名），`projectId` 只在有项目时给。
  */
 export function timelineModel(projects, orders, plans, today = todayISO()) {
-  const projectName = new Map(projects.map((project) => [project.id, project.name]))
   const useOrders = orders
     .map((order) => ({
       kind: 'order',
@@ -384,8 +373,8 @@ export function timelineModel(projects, orders, plans, today = todayISO()) {
       kind: 'plan',
       id: plan.id,
       title: plan.title,
-      projectId: plan.projectId,
-      sourceName: projectName.get(plan.projectId) || '未归项目',
+      projectId: '',
+      sourceName: plan.module || '未归模块',
       startedOn: plan.startedOn || (plan.createdAt ? plan.createdAt.slice(0, 10) : today),
       dueDate: plan.dueDate || plan.startedOn || '',
       risk: planRisk(plan, today)
@@ -403,8 +392,7 @@ export function timelineModel(projects, orders, plans, today = todayISO()) {
       sourceName: project.name,
       startedOn: project.startedOn || project.dueDate,
       dueDate: project.dueDate || project.startedOn,
-      risk: projectRisk(project, plans, today),
-      children: usePlans.filter((item) => item.projectId === project.id)
+      risk: projectRisk(project, today)
     })
   }
   const all = [...rows, ...useOrders, ...usePlans]

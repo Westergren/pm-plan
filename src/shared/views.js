@@ -85,7 +85,7 @@ function matchesKeyword(text, keyword) {
 }
 
 /**
- * 智能视图过滤。`moduleId`/`platform` 决定项目范围（工单按自己的 `module` 归口），
+ * 智能视图过滤。`moduleId` 决定项目、工单与计划的范围（三者的 `module` 字段），
  * `view` 决定保留哪些条目（空串 = 不套用智能视图，项目/工单/计划全部保留），
  * `target` 只收窄工单，`search` 对项目、工单、计划各自生效。
  * 返回 `{ projects, orders, plans }`，三者口径一致。
@@ -99,7 +99,7 @@ export function applyView(projects, orders, plans, { moduleId = '', view = '', p
   let scopedOrders = orders.filter((order) => inModuleName(order.module, moduleId))
   if (target) scopedOrders = scopedOrders.filter((order) => order.target === target)
 
-  let scopedPlans = []
+  let scopedPlans = plans.filter((plan) => inModuleName(plan.module, moduleId))
   if (keyword) {
     scoped = scoped.filter((project) =>
       matchesKeyword([project.code, project.name, project.summary, project.owner, project.platform, ...(project.tags || [])].join(' '), keyword)
@@ -108,15 +108,14 @@ export function applyView(projects, orders, plans, { moduleId = '', view = '', p
     scopedOrders = scopedOrders.filter((order) =>
       matchesKeyword([order.code, order.title, order.description, order.owner, order.stage, order.kind, order.priority, order.module].join(' '), keyword)
     )
-    const scopedIds = new Set(scoped.map((project) => project.id))
-    scopedPlans = plans.filter((plan) => scopedIds.has(plan.projectId) || (!plan.projectId && matchesKeyword(plan.title, keyword)))
-  } else {
-    const scopedIds = new Set(scoped.map((project) => project.id))
-    scopedPlans = plans.filter((plan) => !plan.projectId || scopedIds.has(plan.projectId))
+    // 计划也直接挂模块，按自己的内容（含模块名）匹配即可，不再看它是否属于某个命中项目。
+    scopedPlans = scopedPlans.filter((plan) =>
+      matchesKeyword([plan.title, plan.note, plan.owner, plan.status, plan.module].join(' '), keyword)
+    )
   }
 
   if (view === 'attention') {
-    scoped = scoped.filter((project) => needsAttention(projectRisk(project, plans, today)))
+    scoped = scoped.filter((project) => needsAttention(projectRisk(project, today)))
     scopedOrders = scopedOrders.filter((order) => needsAttention(orderRisk(order, today)))
     scopedPlans = scopedPlans.filter((plan) => needsAttention(planRisk(plan, today)))
   } else if (view === 'overdue') {
@@ -127,8 +126,8 @@ export function applyView(projects, orders, plans, { moduleId = '', view = '', p
   } else if (view === 'week') {
     const inWeek = (date) => Boolean(date) && date >= today && date <= weekEnd
     const weekPlans = scopedPlans.filter((plan) => inWeek(plan.dueDate))
-    // 工单已经不在项目下面了，所以项目只看自己的投产日期与自己的计划。
-    scoped = scoped.filter((project) => inWeek(project.dueDate) || weekPlans.some((plan) => plan.projectId === project.id))
+    // 工单与计划都已经不在项目下面了，所以项目只看自己的投产日期。
+    scoped = scoped.filter((project) => inWeek(project.dueDate))
     scopedOrders = scopedOrders.filter((order) => inWeek(order.dueDate))
     scopedPlans = weekPlans
   } else if (view === 'unscheduled') {
@@ -174,8 +173,8 @@ export function orderSmartCounts(projects, orders, plans, { moduleId = '', targe
  *
  * 每个分区同时给出该模块下的项目与工单——工单是直接挂模块的，所以两边都算这个模块的内容。
  */
-export function groupByModule(projects, orders, plans, today = todayISO(), modules = DEFAULT_MODULES) {
-  const decorated = decorateProjects(projects, plans, today)
+export function groupByModule(projects, orders, today = todayISO(), modules = DEFAULT_MODULES) {
+  const decorated = decorateProjects(projects, today)
   const names = mergeNames(modules, [
     ...decorated.map((project) => moduleOf(project, modules)),
     ...orders.map((order) => order.module)
@@ -193,8 +192,8 @@ export function groupByModule(projects, orders, plans, today = todayISO(), modul
 }
 
 /** 按端分区（多端视角）。项目看它登记的端，工单看它的目标端——两者共用同一份端命名。 */
-export function groupByPlatform(projects, orders, plans, today = todayISO(), platforms = DEFAULT_PLATFORMS) {
-  const decorated = decorateProjects(projects, plans, today)
+export function groupByPlatform(projects, orders, today = todayISO(), platforms = DEFAULT_PLATFORMS) {
+  const decorated = decorateProjects(projects, today)
   const groups = []
   for (const name of mergeNames(platforms, [...decorated.map((project) => project.platform), ...orders.map((order) => order.target)])) {
     const items = decorated
@@ -207,13 +206,7 @@ export function groupByPlatform(projects, orders, plans, today = todayISO(), pla
   return groups
 }
 
-/** 给计划补上所属项目名（计划仍然挂在项目下）。 */
-export function attachProjectName(items, projects) {
-  const names = new Map(projects.map((project) => [project.id, project.name]))
-  return items.map((item) => ({ ...item, projectName: names.get(item.projectId) || '未归项目' }))
-}
-
-/** 给工单补上它挂的模块名（工单不再有归属项目，界面上显示的就是模块）。 */
+/** 给工单与计划补上它们挂的模块名（两者都不再有归属项目，界面上显示的就是模块）。 */
 export function attachModuleName(items) {
   return items.map((item) => ({ ...item, moduleName: item.module || '未归模块' }))
 }
@@ -226,16 +219,15 @@ export function sortOrders(orders, today = todayISO(), mode = 'risk') {
   return items.sort((left, right) => riskRank(left.risk) - riskRank(right.risk) || (left.dueDate || '9999').localeCompare(right.dueDate || '9999'))
 }
 
-export function sortPlans(plans, projects, today = todayISO(), mode = 'risk') {
-  const items = attachProjectName(plans.map((plan) => ({ ...plan, risk: planRisk(plan, today) })), projects)
+export function sortPlans(plans, today = todayISO(), mode = 'risk') {
+  const items = attachModuleName(plans.map((plan) => ({ ...plan, risk: planRisk(plan, today) })))
   if (mode === 'due') return items.sort((left, right) => (left.dueDate || '9999').localeCompare(right.dueDate || '9999'))
   if (mode === 'status') return items.sort((left, right) => left.status.localeCompare(right.status, 'zh-Hans-CN') || (left.dueDate || '9999').localeCompare(right.dueDate || '9999'))
   return items.sort((left, right) => riskRank(left.risk) - riskRank(right.risk) || (left.dueDate || '9999').localeCompare(right.dueDate || '9999'))
 }
 
-/** 本周视图：按天分桶（周一到周日）。`sourceName` 是归属名——工单看模块，计划看项目。 */
-export function weekBoard(orders, plans, projects, today = todayISO()) {
-  const names = new Map(projects.map((project) => [project.id, project.name]))
+/** 本周视图：按天分桶（周一到周日）。`sourceName` 是归属名——工单与计划都看模块。 */
+export function weekBoard(orders, plans, today = todayISO()) {
   const start = startOfWeek(today)
   const days = []
   for (let index = 0; index < 7; index += 1) {
@@ -252,7 +244,7 @@ export function weekBoard(orders, plans, projects, today = todayISO()) {
       if (isPlanDone(plan) || plan.dueDate !== date) continue
       items.push({
         kind: 'plan', id: plan.id, title: plan.title, risk: planRisk(plan, today),
-        sourceName: names.get(plan.projectId) || '未归项目', owner: plan.owner, meta: `${plan.status} · ${plan.progress}%`
+        sourceName: plan.module || '未归模块', owner: plan.owner, meta: plan.status
       })
     }
     items.sort((left, right) => riskRank(left.risk) - riskRank(right.risk))
