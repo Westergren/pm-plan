@@ -369,6 +369,105 @@ test('jsdom 挂载：设置弹窗改模块名会落盘并级联到已有项目',
   }
 })
 
+test('jsdom 挂载：改「端」名会同时级联项目与工单目标端', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    await panel.act(() => click([...panel.document.querySelectorAll('button')].find((node) => node.textContent === '设置')))
+
+    const input = panel.document.querySelector('input[aria-label="端 1"]')
+    assert.ok(input, '设置弹窗里没有端名称输入框')
+    assert.equal(input.value, '移动手机')
+    await panel.act(() => typeInto(panel, input, '手机端'))
+
+    const save = [...panel.document.querySelectorAll('button')].find((node) => node.textContent.startsWith('保存'))
+    assert.match(save.textContent, /含 1 项改名/, `保存按钮应提示 1 项改名：${save.textContent}`)
+    await panel.act(() => click(save))
+    await panel.flush(700)
+
+    const written = panel.fake.memory.state
+    assert.ok(written.config.platforms.includes('手机端'), '端配置没落盘')
+    assert.ok(!written.config.platforms.includes('移动手机'), '旧端名应被替换')
+    assert.ok(written.projects.every((project) => project.platform !== '移动手机'), '项目的端没级联')
+    assert.ok(written.projects.some((project) => project.platform === '手机端'), '项目应改到新端名下')
+    assert.ok(written.orders.every((order) => order.target !== '移动手机'), '工单的目标端没级联')
+    assert.ok(written.orders.some((order) => order.target === '手机端'), '工单应改到新端名下')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：删掉在用的模块不会清空数据，旧名称退回历史取值继续可筛', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    assert.equal(
+      panel.document.querySelectorAll('.pmplan-side').length,
+      0,
+      '这个用例的断言建立在没有左侧栏的前提上'
+    )
+    await panel.act(() => click([...panel.document.querySelectorAll('button')].find((node) => node.textContent === '设置')))
+
+    const moduleDim = panel.document.querySelectorAll('.pmplan-dim')[0]
+    const rows = [...moduleDim.querySelectorAll('.pmplan-dim-row')]
+    assert.equal(rows.length, 4, `模块应有 4 行，实际 ${rows.length}`)
+    const target = rows[1]
+    assert.equal(target.querySelector('input').value, '移动端开发')
+    assert.match(target.querySelector('.pmplan-dim-usage').textContent, /引用 \d+/, '每行应显示引用数')
+
+    const before = panel.fake.memory.state.projects.filter((project) => project.module === '移动端开发').length
+    assert.ok(before > 0, '示例数据里应有「移动端开发」的项目')
+    await panel.act(() => click(target.querySelector('button')))
+
+    const save = [...panel.document.querySelectorAll('button')].find((node) => node.textContent.startsWith('保存'))
+    assert.equal(save.textContent, '保存', '删除不是改名，不该提示改名项数')
+    await panel.act(() => click(save))
+    await panel.flush(700)
+
+    const written = panel.fake.memory.state
+    assert.ok(!written.config.modules.includes('移动端开发'), '配置里应已删掉该模块')
+    assert.equal(
+      written.projects.filter((project) => project.module === '移动端开发').length,
+      before,
+      '删除配置项不该改动已有项目数据'
+    )
+
+    await panel.act(() => click([...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === '项目')))
+    assert.ok(
+      [...panel.document.querySelectorAll('.pmplan-chip')].some((node) => node.textContent.trim() === '移动端开发'),
+      '已删除模块的历史取值应继续出现在筛选项里，否则这些项目就再也筛不出来了'
+    )
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：设置里出现重名或删空时禁止保存并说明原因', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    await panel.act(() => click([...panel.document.querySelectorAll('button')].find((node) => node.textContent === '设置')))
+    const save = () => [...panel.document.querySelectorAll('button')].find((node) => node.textContent.startsWith('保存'))
+
+    assert.equal(save().disabled, false, '初始状态应可保存')
+    await panel.act(() => typeInto(panel, panel.document.querySelector('input[aria-label="模块 2"]'), '公司项目'))
+    assert.equal(save().disabled, true, '重名时应禁止保存')
+    assert.ok(panel.document.body.textContent.includes('同一维度里的名称不能重复'), '没有说明重名原因')
+
+    await panel.act(() => typeInto(panel, panel.document.querySelector('input[aria-label="模块 2"]'), '移动端开发'))
+    assert.equal(save().disabled, false, '改回来应恢复可保存')
+
+    const moduleDim = panel.document.querySelectorAll('.pmplan-dim')[0]
+    for (const row of [...moduleDim.querySelectorAll('.pmplan-dim-row')].slice(0, 3)) {
+      await panel.act(() => click(row.querySelector('button')))
+    }
+    assert.equal(moduleDim.querySelectorAll('.pmplan-dim-row').length, 1, '应保留最后一行不允许删空')
+    assert.equal(moduleDim.querySelector('.pmplan-dim-row button').disabled, true, '只剩一行时删除按钮应禁用')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
 test('jsdom 挂载：需求文档页在服务端有文档数据时正常渲染', async () => {
   const docsPayload = {
     root: '/Users/x/Documents/项目计划工作台文档',
