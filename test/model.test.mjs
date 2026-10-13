@@ -82,9 +82,12 @@ test('normalizeState 丢弃脏数据、补默认值、统一枚举', () => {
   assert.equal(state.orders[0].estDays, undefined)
   assert.equal(state.orders[0].code, '')
   assert.equal(state.orders[1].projectId, undefined)
+  // 存量工单按原项目所属的模块迁移（p1 没写 module，收敛后是配置里的第一个模块）
+  assert.equal(state.orders[0].module, '公司项目')
+  // 原项目已经不存在（ghost）时留空，界面显示「未归模块」
+  assert.equal(state.orders[1].module, '')
   // 没有 createdOn 时收敛成 createdAt 当天（空值等于今天，保证看板/表格有日期可显示）
   assert.match(state.orders[0].createdOn, /^\d{4}-\d{2}-\d{2}$/)
-  assert.equal(state.orders[1].module, '')
 
   assert.equal(state.plans.length, 2)
   assert.equal(state.plans[0].status, '未开始')
