@@ -208,6 +208,13 @@ export const styles = `
 
 .pmplan-chip[aria-pressed="true"] .pmplan-chip-count { color: inherit; }
 
+/* 从概览点卡带进来的「当前视图」标记，末尾的 ✕ 表示点一下即可清除。 */
+.pmplan-chip-x {
+  font-size: 10px;
+  opacity: 0.7;
+}
+.pmplan-chip[aria-pressed="true"] .pmplan-chip-x { opacity: 0.9; }
+
 /* ---------- 概览的智能视图卡 ---------- */
 
 .pmplan-smart {

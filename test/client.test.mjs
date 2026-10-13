@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { createFakeServer, loadClient } from './helpers/client-loader.mjs'
 import { sampleState } from '../src/shared/seed.js'
 import { normalizeState } from '../src/shared/model.js'
-import { moduleOptions, orderSmartCounts, platformOptions, projectSmartCounts, targetOptions } from '../src/shared/views.js'
+import { moduleOptions, platformOptions, projectSmartCounts, targetOptions } from '../src/shared/views.js'
 
 const today = '2026-10-10'
 
@@ -62,7 +62,6 @@ test('各业务页签在有数据时都能渲染出内容', async () => {
   const platformNames = platformOptions(state.config.platforms, state.projects)
   const targetNames = targetOptions(state.config.platforms, state.orders)
   const projectCounts = projectSmartCounts(state.projects, state.orders, state.plans, {}, today)
-  const orderCounts = orderSmartCounts(state.projects, state.orders, state.plans, {}, today)
   const base = {
     today,
     projects: state.projects,
@@ -77,7 +76,10 @@ test('各业务页签在有数据时都能渲染出内容', async () => {
     moduleNames,
     platformNames,
     targetNames,
-    scope: { smart: 'all', moduleId: '', platform: '', target: '' },
+    // scope.smart 为空 = 不套智能视图；view 是概览统计卡带过来的当前视图标记
+    scope: { smart: '', moduleId: '', platform: '', target: '' },
+    view: '',
+    onClearView: noop,
     setScope: noop,
     onOpenSmart: noop,
     counts: projectCounts,
@@ -123,7 +125,7 @@ test('各业务页签在有数据时都能渲染出内容', async () => {
   }
   const expectations = {
     OverviewScreen: ['在管项目', '风险分布', '本周', '需关注', '未排期', '模块', '端'],
-    ProjectsScreen: ['手机银行 6.2 版本迭代', '按模块', '智能视图', '在管'],
+    ProjectsScreen: ['手机银行 6.2 版本迭代', '按模块', '模块', '端'],
     OrdersScreen: ['转账限额调整（含人脸复核）', '阶段', '目标端'],
     PlansScreen: ['与后端确认限额分级口径', '计划'],
     CalendarScreen: ['2026 年 10 月', '回到本月'],
@@ -134,8 +136,7 @@ test('各业务页签在有数据时都能渲染出内容', async () => {
   for (const [name, expected] of Object.entries(expectations)) {
     const Screen = screens[name]
     assert.equal(typeof Screen, 'function', `${name} 未导出`)
-    const own = name === 'OrdersScreen' ? { ...base, counts: orderCounts } : base
-    const props = name === 'DocsScreen' ? { ...base, ...docsProps } : own
+    const props = name === 'DocsScreen' ? { ...base, ...docsProps } : base
     const markup = renderToStaticMarkup(React.createElement(Screen, props))
     assert.ok(markup.length > 200, `${name} 渲染内容过少`)
     assert.ok(!markup.includes('undefined'), `${name} 渲染里出现 undefined`)
@@ -299,9 +300,40 @@ test('jsdom 挂载：概览的智能视图卡点开就是项目页的对应视�
 
     const tab = (label) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === label)
     assert.equal(tab('项目').getAttribute('aria-selected'), 'true', '点统计卡应跳到项目页')
+    assert.ok(!panel.document.body.textContent.includes('智能视图'), '项目页不该再出现智能视图筛选项')
     const pressed = [...panel.document.querySelectorAll('.pmplan-chip[aria-pressed="true"]')].map((node) => node.textContent)
-    assert.ok(pressed.some((text) => text.includes('已完成')), `项目页没有切到「已完成」视图：${pressed.join(' / ')}`)
+    assert.ok(pressed.some((text) => text.includes('已完成')), `项目页没有显示「已完成」当前视图标记：${pressed.join(' / ')}`)
     assert.ok(panel.document.body.textContent.includes('上季度移动端质量复盘'), '已完成视图里应能看到已完成项目')
+    assert.ok(!panel.document.body.textContent.includes('手机银行 6.2 版本迭代'), '已完成视图里不该出现在管项目')
+
+    // 「全部」维度 chip 本身就带 aria-pressed，这里只找智能视图那枚标记；标记可点掉。
+    const marker = () => [...panel.document.querySelectorAll('.pmplan-chip[aria-pressed="true"]')]
+      .find((node) => node.textContent.includes('已完成'))
+    await panel.act(() => click(marker()))
+    assert.equal(marker(), undefined, '点掉标记后不该还有「已完成」当前视图')
+    assert.ok(panel.document.body.textContent.includes('手机银行 6.2 版本迭代'), '清除当前视图后应回到全量列表')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：项目与工单默认不套智能视图，已完成的项目也在列表里', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    const tab = (label) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === label)
+
+    await panel.act(() => click(tab('项目')))
+    assert.ok(!panel.document.body.textContent.includes('智能视图'), '项目页不该再出现智能视图筛选项')
+    // 只剩模块/端两枚「全部」维度 chip 处于选中态，没有任何智能视图残留
+    const picked = [...panel.document.querySelectorAll('.pmplan-chip[aria-pressed="true"]')].map((node) => node.textContent.trim())
+    assert.deepEqual(picked, ['全部', '全部'], `默认不该有智能视图筛选残留：${picked.join(' / ')}`)
+    assert.ok(panel.document.body.textContent.includes('上季度移动端质量复盘'), '默认口径应包含已完成项目')
+    assert.ok(panel.document.body.textContent.includes('手机银行 6.2 版本迭代'), '默认口径应包含在管项目')
+
+    await panel.act(() => click(tab('工单')))
+    assert.ok(!panel.document.body.textContent.includes('智能视图'), '工单页不该再出现智能视图筛选项')
+    assert.ok(panel.document.body.textContent.includes('全部端'), '工单页仍应有目标端筛选')
   } finally {
     await panel.cleanup()
   }

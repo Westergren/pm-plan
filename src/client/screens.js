@@ -71,12 +71,15 @@ function ChipRow({ label, children }) {
  * 页内筛查条。这些筛选以前挂在左侧栏、对所有页面生效；现在下沉到页面自己身上，
  * 每页只显示与自己有关的维度——项目页看「模块 + 端」，工单页看「模块 + 目标端」。
  * 筛选状态由面板按页持有，所以来回切页签不会互相冲掉。
+ *
+ * 智能视图不在这条上罗列（它只在概览的统计卡里）。但概览的卡是可点的，点进来会
+ * 带上一个视图；这时显示一枚可关闭的「当前视图」标记，免得列表被悄悄收窄而看不出来源。
  */
-function FilterBar({ counts, scope, setScope, dims }) {
-  const dirty = dims.some((dim) => scope[dim.key]) || Boolean(counts && scope.smart !== 'all')
+function FilterBar({ scope, setScope, dims, view, onClearView }) {
+  const dirty = dims.some((dim) => scope[dim.key]) || Boolean(view)
   const reset = () => setScope((current) => {
     const next = { ...current }
-    if (counts) next.smart = 'all'
+    if (view) next.smart = ''
     for (const dim of dims) next[dim.key] = ''
     return next
   })
@@ -90,15 +93,16 @@ function FilterBar({ counts, scope, setScope, dims }) {
   }, h('span', null, label), extra || null)
 
   return h('div', { className: 'pmplan-filters' },
-    counts
-      ? h(ChipRow, { label: '智能视图' },
-          counts.map((row) => chip(
-            row.id,
-            row.label,
-            scope.smart === row.id,
-            () => setScope((current) => ({ ...current, smart: row.id })),
-            h('span', { className: 'pmplan-chip-count', title: SMART_HINTS[row.id] || '' }, String(row.count))
-          ))
+    view
+      ? h(ChipRow, { label: '视图' },
+          h('button', {
+            key: 'view',
+            type: 'button',
+            className: 'pmplan-chip',
+            'aria-pressed': 'true',
+            title: `${SMART_HINTS[scope.smart] || ''} · 来自概览，点一下清除`,
+            onClick: onClearView
+          }, h('span', null, view), h('span', { className: 'pmplan-chip-x' }, '✕'))
         )
       : null,
     dims.map((dim) => h(ChipRow, { key: dim.key, label: dim.label },
@@ -188,7 +192,6 @@ export function OverviewScreen(props) {
     h(SmartCards, { key: 'smart', counts, onOpenSmart }),
     h(FilterBar, {
       key: 'filters',
-      counts: null,
       scope,
       setScope,
       dims: [
@@ -334,7 +337,7 @@ export function OverviewScreen(props) {
 /* ---------------- 项目 ---------------- */
 
 export function ProjectsScreen(props) {
-  const { scoped, orders, plans, today, onOpenProject, onOpenOrder, onOpenPlan, onEditProject, onDelete, scope, setScope, counts, moduleNames, platformNames } = props
+  const { scoped, orders, plans, today, onOpenProject, onOpenOrder, onOpenPlan, onEditProject, onDelete, scope, setScope, view, onClearView, moduleNames, platformNames } = props
   const [grouping, setGrouping] = useState('module')
   const [expanded, setExpanded] = useState('')
   const groups = grouping === 'platform'
@@ -348,9 +351,10 @@ export function ProjectsScreen(props) {
   return [
     h(FilterBar, {
       key: 'filters',
-      counts,
       scope,
       setScope,
+      view,
+      onClearView,
       dims: [
         { key: 'moduleId', label: '模块', names: moduleNames },
         { key: 'platform', label: '端', names: platformNames }
@@ -454,7 +458,7 @@ export function ProjectsScreen(props) {
 /* ---------------- 工单 ---------------- */
 
 export function OrdersScreen(props) {
-  const { scoped, projects, today, onOpenOrder, onEditOrder, onDelete, scope, setScope, counts, moduleNames, targetNames } = props
+  const { scoped, projects, today, onOpenOrder, onEditOrder, onDelete, scope, setScope, moduleNames, targetNames } = props
   const [mode, setMode] = useState('table')
   const [sortMode, setSortMode] = useState('risk')
   const rows = sortOrders(scoped.orders, projects, today, sortMode)
@@ -463,7 +467,6 @@ export function OrdersScreen(props) {
   return [
     h(FilterBar, {
       key: 'filters',
-      counts,
       scope,
       setScope,
       dims: [

@@ -23,6 +23,8 @@ import { endOfWeek, startOfWeek, todayISO } from './date.js'
 export const SMART_VIEWS = [
   // 'all' 是「在管」口径：与 kpis.active 一致，默认排除已完成的项目/工单/计划。
   // 想看已完成请用 'done'；模块/端筛选条上的「全部」才是不分状态的全量口径。
+  // 智能视图只在概览的统计卡上罗列，项目/工单页不再摆这一排筛选项；
+  // 从概览点卡带上视图进来时，页内会显示一枚可关闭的「当前视图」标记。
   { id: 'all', label: '在管' },
   { id: 'attention', label: '需关注' },
   { id: 'overdue', label: '已逾期' },
@@ -30,6 +32,11 @@ export const SMART_VIEWS = [
   { id: 'unscheduled', label: '未排期' },
   { id: 'done', label: '已完成' }
 ]
+
+export function smartViewLabel(id) {
+  const found = SMART_VIEWS.find((item) => item.id === id)
+  return found ? found.label : ''
+}
 
 export function moduleOf(project, modules = DEFAULT_MODULES) {
   const value = project && project.module ? String(project.module).trim() : ''
@@ -70,11 +77,12 @@ function matchesKeyword(text, keyword) {
 }
 
 /**
- * 智能视图过滤。`moduleId`/`platform` 决定项目范围，`view` 决定保留哪些条目，
+ * 智能视图过滤。`moduleId`/`platform` 决定项目范围，`view` 决定保留哪些条目
+ * （空串 = 不套用智能视图，项目/工单/计划全部保留），`target` 只收窄工单，
  * `search` 对项目、工单、计划同时生效（命中项目则保留其下条目）。
  * 返回 `{ projects, orders, plans }`，三者口径一致。
  */
-export function applyView(projects, orders, plans, { moduleId = '', view = 'all', platform = '', target = '', search = '' } = {}, today = todayISO()) {
+export function applyView(projects, orders, plans, { moduleId = '', view = '', platform = '', target = '', search = '' } = {}, today = todayISO()) {
   const weekEnd = endOfWeek(today)
   let scoped = projects.filter((project) => inModule(project, moduleId))
   if (platform) scoped = scoped.filter((project) => project.platform === platform)
@@ -135,11 +143,13 @@ export function applyView(projects, orders, plans, { moduleId = '', view = 'all'
     scoped = scoped.filter((project) => isProjectDone(project))
     scopedOrders = scopedOrders.filter((order) => isOrderDone(order))
     scopedPlans = scopedPlans.filter((plan) => isPlanDone(plan))
-  } else {
+  } else if (view === 'all') {
     scoped = scoped.filter((project) => !isProjectDone(project))
     scopedOrders = scopedOrders.filter((order) => !isOrderDone(order))
     scopedPlans = scopedPlans.filter((plan) => !isPlanDone(plan))
   }
+  // view 为空串 = 不套用任何智能视图。项目/工单页的默认口径是全量，
+  // 页面上不再摆智能视图筛选项，所以更不能留一个看不见来源的隐藏筛选。
 
   // 「目标端」只收窄工单——它说的是工单自己要交付到哪个端，与项目登记的端不是一回事。
   if (target) scopedOrders = scopedOrders.filter((order) => order.target === target)

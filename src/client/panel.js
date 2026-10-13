@@ -67,7 +67,7 @@ import {
   projectRisk,
   riskTone
 } from '../shared/metrics.js'
-import { applyView, moduleOptions, orderSmartCounts, platformOptions, projectSmartCounts, targetOptions } from '../shared/views.js'
+import { applyView, moduleOptions, platformOptions, projectSmartCounts, smartViewLabel, targetOptions } from '../shared/views.js'
 import { buildReport } from '../shared/report.js'
 import { addDays, formatDate, formatDateTime, todayISO } from '../shared/date.js'
 import { isEmptyState, sampleState } from '../shared/seed.js'
@@ -159,8 +159,10 @@ export function PlanWorkbench({ service, entry, conversation }) {
   const [view, setView] = useState('overview')
   // 筛选按页各自持有，互不干扰：概览只按模块/端收窄，项目与工单还各带一个智能视图。
   const [overviewScope, setOverviewScope] = useState({ moduleId: '', platform: '' })
-  const [projectScope, setProjectScope] = useState({ smart: 'all', moduleId: '', platform: '' })
-  const [orderScope, setOrderScope] = useState({ smart: 'all', moduleId: '', target: '' })
+  // 项目/工单页默认不套智能视图（smart 为空串）——页面上不再摆智能视图筛选项，
+  // 默认口径必须是全量，否则就会变成一个看不见来源的隐藏筛选。
+  const [projectScope, setProjectScope] = useState({ smart: '', moduleId: '', platform: '' })
+  const [orderScope, setOrderScope] = useState({ moduleId: '', target: '' })
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [data, setData] = useState(() => ({ revision: 0, state: normalizeState({}) }))
@@ -284,8 +286,10 @@ export function PlanWorkbench({ service, entry, conversation }) {
   const platformNames = useMemo(() => platformOptions(config.platforms, projects), [config.platforms, projects])
   const targetNames = useMemo(() => targetOptions(config.platforms, orders), [config.platforms, orders])
 
+  // 概览的模块/端表按「在管」口径统计在办工作——这里显式传 view，
+  // 不依赖 applyView 的默认值（默认值现在是「不套用智能视图」）。
   const overviewScoped = useMemo(
-    () => applyView(projects, orders, plans, { moduleId: overviewScope.moduleId, platform: overviewScope.platform, search }, today),
+    () => applyView(projects, orders, plans, { moduleId: overviewScope.moduleId, view: 'all', platform: overviewScope.platform, search }, today),
     [projects, orders, plans, overviewScope, search, today]
   )
   const overviewCounts = useMemo(
@@ -296,17 +300,9 @@ export function PlanWorkbench({ service, entry, conversation }) {
     () => applyView(projects, orders, plans, { moduleId: projectScope.moduleId, view: projectScope.smart, platform: projectScope.platform, search }, today),
     [projects, orders, plans, projectScope, search, today]
   )
-  const projectCounts = useMemo(
-    () => projectSmartCounts(projects, orders, plans, { moduleId: projectScope.moduleId, platform: projectScope.platform }, today),
-    [projects, orders, plans, projectScope, today]
-  )
   const orderScoped = useMemo(
-    () => applyView(projects, orders, plans, { moduleId: orderScope.moduleId, view: orderScope.smart, target: orderScope.target, search }, today),
+    () => applyView(projects, orders, plans, { moduleId: orderScope.moduleId, target: orderScope.target, search }, today),
     [projects, orders, plans, orderScope, search, today]
-  )
-  const orderCounts = useMemo(
-    () => orderSmartCounts(projects, orders, plans, { moduleId: orderScope.moduleId, target: orderScope.target }, today),
-    [projects, orders, plans, orderScope, today]
   )
   // 计划/日历/风险/汇报不参与页内筛查，始终看全量。
   const allScoped = useMemo(() => ({ projects, orders, plans }), [projects, orders, plans])
@@ -669,15 +665,16 @@ export function PlanWorkbench({ service, entry, conversation }) {
   const projectProps = {
     ...screenProps,
     scoped: projectScoped,
-    counts: projectCounts,
     scope: projectScope,
-    setScope: setProjectScope
+    setScope: setProjectScope,
+    // 智能视图只可能来自概览的统计卡；在页面上把它显示成一枚可关闭的标记。
+    view: smartViewLabel(projectScope.smart),
+    onClearView: () => setProjectScope((scope) => ({ ...scope, smart: '' }))
   }
 
   const orderProps = {
     ...screenProps,
     scoped: orderScoped,
-    counts: orderCounts,
     scope: orderScope,
     setScope: setOrderScope
   }

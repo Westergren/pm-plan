@@ -65,10 +65,17 @@ test('moduleOptions / platformOptions / targetOptions 并入配置与历史取�
   assert.ok(targets.every((name) => name.trim() === name && name))
 })
 
-test('applyView：默认排除已完成，smart 视图各自过滤', () => {
+test('applyView：view 为空不做状态过滤，smart 视图各自过滤', () => {
   const projects = [project({ id: 'p1' }), project({ id: 'p2', status: '已完成' }), project({ id: 'p3', dueDate: addDays(today, -2) })]
   const orders = [order({ id: 'o1', projectId: 'p1' }), order({ id: 'o2', projectId: 'p1', dueDate: addDays(today, -1) })]
   const plans = [plan({ id: 'n1', projectId: 'p1', dueDate: addDays(today, 1) })]
+
+  // 不传 view 是项目/工单页的默认口径：全量保留，已完成的项目也在列表里。
+  // 这两个页面不再摆智能视图筛选项，默认口径就不能自带任何状态过滤。
+  const plain = applyView(projects, orders, plans, {}, today)
+  assert.deepEqual(plain.projects.map((item) => item.id), ['p1', 'p2', 'p3'])
+  assert.equal(plain.orders.length, 2)
+  assert.equal(plain.plans.length, 1)
 
   const all = applyView(projects, orders, plans, { view: 'all' }, today)
   assert.deepEqual(all.projects.map((item) => item.id), ['p1', 'p3'])
