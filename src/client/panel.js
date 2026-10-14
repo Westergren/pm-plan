@@ -447,12 +447,16 @@ export function PlanWorkbench({ service, entry, conversation }) {
     }
   }, [docsRootDraft, loadDocs, showToast])
 
-  const uploadDocs = useCallback(async (files) => {
+  /**
+   * 导入文档。`targetFolder` 为 null 表示保留所选目录结构；为字符串时所有文件都放进该子目录。
+   * 能拿到本机路径的文件走服务端「移动」，其余退回「复制内容」。
+   */
+  const uploadDocs = useCallback(async (files, targetFolder = null) => {
     setDocsUploading(true)
     setDocsError('')
     try {
       const list = [...files]
-      const paths = list.map(file => (typeof file.path === 'string' ? file.path : '')).filter(Boolean)
+      const paths = list.map(filePathOf).filter(Boolean)
       let commonDir = ''
       if (paths.length > 1) {
         const segments = paths.map(p => p.split('/').slice(0, -1))
@@ -465,19 +469,33 @@ export function PlanWorkbench({ service, entry, conversation }) {
         }
         commonDir = shared.length ? `${shared.join('/')}/` : ''
       }
+      let moved = 0
+      let copied = 0
       for (const file of list) {
-        const relative = commonDir && typeof file.path === 'string' && file.path.startsWith(commonDir)
-          ? file.path.slice(commonDir.length)
+        const source = filePathOf(file)
+        const relative = commonDir && source.startsWith(commonDir)
+          ? source.slice(commonDir.length)
           : (file.webkitRelativePath && file.webkitRelativePath.includes('/')
               ? file.webkitRelativePath.slice(file.webkitRelativePath.indexOf('/') + 1)
               : file.name)
         const clean = relative.split('/').filter(Boolean).join('/') || file.name
-        const folder = clean.includes('/') ? clean.slice(0, clean.lastIndexOf('/')) : ''
-        const base64 = await fileToBase64(file)
-        await uploadDoc({ name: clean.slice(clean.lastIndexOf('/') + 1), folder, base64 })
+        // 指定了目标子目录：所有文件平铺进该目录，文件名保持原样。
+        const name = targetFolder === null
+          ? clean.slice(clean.lastIndexOf('/') + 1)
+          : (clean.split('/').filter(Boolean).pop() || file.name)
+        const folder = targetFolder === null
+          ? (clean.includes('/') ? clean.slice(0, clean.lastIndexOf('/')) : '')
+          : targetFolder
+        const base64 = source ? '' : await fileToBase64(file)
+        await uploadDoc({ name, folder, base64, sourcePath: source })
+        if (source) moved += 1
+        else copied += 1
       }
       await loadDocs()
-      showToast(`已导入 ${list.length} 个文档`)
+      const parts = []
+      if (moved) parts.push(`移动 ${moved} 个`)
+      if (copied) parts.push(`复制 ${copied} 个`)
+      showToast(`已导入 ${list.length} 个文档（${parts.join('，')}）`)
     } catch (uploadError) {
       setDocsError(uploadError instanceof ApiError ? uploadError.message : '导入文档失败。')
     } finally {
@@ -693,7 +711,7 @@ export function PlanWorkbench({ service, entry, conversation }) {
         onSetDocsRootDraft: setDocsRootDraft,
         onConfirmDocsRoot: confirmDocsRoot,
         onPickDocsRoot: (file) => {
-          const path = typeof file.path === 'string' && file.path ? file.path : ''
+          const path = filePathOf(file)
           if (path) {
             const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : path
             setDocsRootDraft(dir)
@@ -1288,6 +1306,25 @@ function SettingsModal({ config, projects, orders, maxItems, maxLength, onClose,
       )
     )
   )
+}
+
+/**
+ * 取用户所选文件的**本机绝对路径**。
+ * Electron 32 起移除了 `File.path`，桌面端改由 preload 桥 `__DSH_HOST_PATHS__` 暴露，
+ * 所以优先问桥；插件跑在普通浏览器里时桥和 `file.path` 都没有，返回空串（退回复制内容）。
+ */
+function filePathOf(file) {
+  if (!file) return ''
+  const bridge = typeof window !== 'undefined' ? window.__DSH_HOST_PATHS__ : null
+  if (bridge && typeof bridge.pathFor === 'function') {
+    try {
+      const value = bridge.pathFor(file)
+      if (typeof value === 'string' && value) return value
+    } catch {
+      // 桥不可用就往下退，别让选文件的交互整个失败
+    }
+  }
+  return typeof file.path === 'string' ? file.path : ''
 }
 
 /** 读文件为 base64（云端/浏览器都可用）。 */

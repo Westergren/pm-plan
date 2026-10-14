@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -98,6 +98,67 @@ test('store：目录未确认前不创建，确认后才建立并写索引', asy
   }
 })
 
+test('store：带 sourcePath 的导入是「移动」，原件不再保留', async () => {
+  const base = await temporary()
+  try {
+    const store = createDocsStore({ root: join(base, '库') })
+    await store.ensureRoot()
+
+    const source = join(base, '外部', '接口清单.xlsx')
+    await mkdir(join(base, '外部'), { recursive: true })
+    await writeFile(source, 'fake-xlsx', 'utf8')
+
+    const moved = await store.upload({ name: '接口清单.xlsx', folder: '手机银行', sourcePath: source })
+    assert.equal(moved.mode, 'moved')
+    assert.equal(moved.path, '手机银行/接口清单.xlsx')
+    assert.equal(moved.bytes, 'fake-xlsx'.length)
+
+    // 原件被移走，内容完整落在文档库里
+    await assert.rejects(() => stat(source), (error) => error.code === 'ENOENT')
+    assert.equal(await readFile(join(base, '库', '手机银行', '接口清单.xlsx'), 'utf8'), 'fake-xlsx')
+
+    const listed = await store.list()
+    assert.ok(listed.documents.some((doc) => doc.path === '手机银行/接口清单.xlsx'), '移动进来的文件要落索引')
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
+
+test('store：移动遇到磁盘上已存在（但没进索引）的同名文件时自动让位，不覆盖', async () => {
+  const base = await temporary()
+  try {
+    const store = createDocsStore({ root: join(base, '库') })
+    await store.ensureRoot()
+    await mkdir(join(base, '库', '手机银行'), { recursive: true })
+    await writeFile(join(base, '库', '手机银行', '接口清单.xlsx'), '手工放进去的', 'utf8')
+
+    const source = join(base, '外部.xlsx')
+    await writeFile(source, '导入的', 'utf8')
+    const moved = await store.upload({ name: '接口清单.xlsx', folder: '手机银行', sourcePath: source })
+
+    assert.equal(moved.path, '手机银行/接口清单-2.xlsx')
+    assert.equal(await readFile(join(base, '库', '手机银行', '接口清单.xlsx'), 'utf8'), '手工放进去的')
+    assert.equal(await readFile(join(base, '库', '手机银行', '接口清单-2.xlsx'), 'utf8'), '导入的')
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
+
+test('store：源文件不存在时移动导入直接报错，不会在库里留空文件', async () => {
+  const base = await temporary()
+  try {
+    const store = createDocsStore({ root: join(base, '库') })
+    await store.ensureRoot()
+    await assert.rejects(
+      () => store.upload({ name: 'x.md', sourcePath: join(base, '没有这个文件.md') }),
+      (error) => error instanceof DocsError && error.status === 404
+    )
+    assert.equal((await store.list()).count, 0)
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
+
 test('store：上传、列表、读取、保存、索引更新全链路', async () => {
   const base = await temporary()
   try {
@@ -114,6 +175,7 @@ test('store：上传、列表、读取、保存、索引更新全链路', async 
     })
     assert.equal(uploaded.path, '手机银行/需求说明书.md')
     assert.equal(uploaded.kind, 'markdown')
+    assert.equal(uploaded.mode, 'copied')
 
     // 同名再传一次 -> 自动加后缀，不覆盖
     const second = await store.upload({ name: '需求说明书.md', folder: '手机银行', base64: Buffer.from('x').toString('base64') })

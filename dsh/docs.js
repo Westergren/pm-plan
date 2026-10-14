@@ -8,7 +8,7 @@
  * - 工作台只主动打开文件，删除必须是调用方显式传 `deleteFile: true`。
  */
 
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -128,6 +128,16 @@ export function relativeToRoot(root, absolute) {
 export function folderOf(relative) {
   const index = String(relative).lastIndexOf('/')
   return index < 0 ? '' : String(relative).slice(0, index)
+}
+
+/** 磁盘上是否已经有这个名字（索引之外、用户手工放进目录的文件也算）。 */
+async function existsOnDisk(absolute) {
+  try {
+    await stat(absolute)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** 冲突时自动加 `-2`、`-3` 后缀。 */
@@ -347,9 +357,82 @@ export function createDocsStore({ root }) {
     return { path: normalizeRelative(relative), bytes: Buffer.byteLength(value, 'utf8') }
   }
 
-  const upload = async ({ name, folder, base64, projectId, orderId, title, tags, note, version }) => {
+  /** 把一次导入登记进索引。 */
+  const recordDoc = (index, target, meta) => {
+    const now = new Date().toISOString()
+    const doc = {
+      id: `doc-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      path: target,
+      projectId: String(meta.projectId || '').trim(),
+      orderId: String(meta.orderId || '').trim(),
+      title: String(meta.title || meta.clean).trim().slice(0, 200),
+      tags: Array.isArray(meta.tags) ? meta.tags : [],
+      note: String(meta.note || '').slice(0, 2000),
+      version: String(meta.version || '').trim().slice(0, 40),
+      addedAt: now,
+      updatedAt: now
+    }
+    index.documents.push(doc)
+    return doc
+  }
+
+  /**
+   * 在文档库里给 `clean` 找一个不会被覆盖的相对路径：
+   * 索引里没有、但磁盘上已有的同名文件也会被 rename 悄悄盖掉，所以要一并让位。
+   */
+  const freeRelative = async (clean, folder, taken) => {
+    const base = normalizeRelative([folder || '', clean].filter(Boolean).join('/'))
+    const used = [...taken]
+    let target = uniqueRelative(base, used)
+    for (let guard = 0; guard < 500 && await existsOnDisk(absoluteOf(target)); guard += 1) {
+      used.push(target)
+      target = uniqueRelative(base, used)
+    }
+    return target
+  }
+
+  /**
+   * **移动**导入：源文件有本机绝对路径时走这里——优先 rename（同盘瞬时完成、不留副本），
+   * 跨设备（U 盘 / 外置盘）则先 copyFile 成功后再 unlink 源文件；复制失败时源文件原封不动。
+   * 浏览器拿不到路径时退回下面 upload 的「复制内容」分支。
+   */
+  const moveInto = async (sourcePath, { clean, folder, projectId, orderId, title, tags, note, version }) => {
+    const from = resolve(expandHome(sourcePath))
+    let stats
+    try {
+      stats = await stat(from)
+    } catch {
+      throw new DocsError('找不到要导入的源文件。', 404)
+    }
+    if (!stats.isFile()) throw new DocsError('只能导入文件，不能导入目录。')
+    if (stats.size > MAX_UPLOAD_BYTES) throw new DocsError('单个文件不能超过 32 MB。', 413)
+
+    const index = await readIndex()
+    const target = await freeRelative(clean, folder, index.documents.map((doc) => doc.path))
+    const absolute = absoluteOf(target)
+    if (absolute === from) throw new DocsError('源文件已经在文档库的这个位置。')
+
+    await mkdir(dirname(absolute), { recursive: true })
+    try {
+      await rename(from, absolute)
+    } catch (error) {
+      if (error && error.code === 'EXDEV') {
+        await copyFile(from, absolute)
+        await unlink(from)
+      } else {
+        throw new DocsError(`移动到文档库失败：${error instanceof Error ? error.message : String(error)}`, 500)
+      }
+    }
+    const doc = recordDoc(index, target, { clean, projectId, orderId, title, tags, note, version })
+    await writeIndex(index)
+    return { id: doc.id, path: target, bytes: stats.size, kind: kindOf(target), mode: 'moved' }
+  }
+
+  const upload = async ({ name, folder, base64, sourcePath, projectId, orderId, title, tags, note, version }) => {
     const clean = safeName(name)
     if (!clean) throw new DocsError('需要提供文件名。')
+    const meta = { clean, projectId, orderId, title, tags, note, version }
+    if (typeof sourcePath === 'string' && sourcePath.trim()) return moveInto(sourcePath.trim(), { ...meta, folder })
     if (typeof base64 !== 'string' || !base64) throw new DocsError('需要提供文件内容。')
     let buffer
     try {
@@ -360,29 +443,15 @@ export function createDocsStore({ root }) {
     if (!buffer.length) throw new DocsError('文件内容为空。')
     if (buffer.length > MAX_UPLOAD_BYTES) throw new DocsError('单个文件不能超过 32 MB。', 413)
     const index = await readIndex()
-    const taken = index.documents.map((doc) => doc.path)
-    const target = uniqueRelative(normalizeRelative([folder || '', clean].filter(Boolean).join('/')), taken)
+    const target = uniqueRelative(normalizeRelative([folder || '', clean].filter(Boolean).join('/')), index.documents.map((doc) => doc.path))
     const absolute = absoluteOf(target)
     await mkdir(dirname(absolute), { recursive: true })
     const temporary = `${absolute}.${process.pid}.${Date.now()}.tmp`
     await writeFile(temporary, buffer)
     await rename(temporary, absolute)
-    const now = new Date().toISOString()
-    const id = `doc-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
-    index.documents.push({
-      id,
-      path: target,
-      projectId: String(projectId || '').trim(),
-      orderId: String(orderId || '').trim(),
-      title: String(title || clean).trim().slice(0, 200),
-      tags: Array.isArray(tags) ? tags : [],
-      note: String(note || '').slice(0, 2000),
-      version: String(version || '').trim().slice(0, 40),
-      addedAt: now,
-      updatedAt: now
-    })
+    const doc = recordDoc(index, target, meta)
     await writeIndex(index)
-    return { id, path: target, bytes: buffer.length, kind: kindOf(target) }
+    return { id: doc.id, path: target, bytes: buffer.length, kind: kindOf(target), mode: 'copied' }
   }
 
   const updateMeta = async (relative, patch) => {

@@ -453,8 +453,14 @@ export function OrdersScreen(props) {
   const { scoped, today, onOpenOrder, onEditOrder, onDelete, scope, setScope, moduleNames, targetNames } = props
   const [mode, setMode] = useState('table')
   const [sortMode, setSortMode] = useState('risk')
-  const rows = sortOrders(scoped.orders, today, sortMode)
-  const columns = orderBoardColumns(scoped.orders, today)
+  const [keyword, setKeyword] = useState('')
+  // 工单搜索：工单编号与标题各取一段做模糊匹配，命中任一即可。
+  const search = keyword.trim().toLowerCase()
+  const matched = search
+    ? scoped.orders.filter((order) => `${order.code || ''}\n${order.title || ''}`.toLowerCase().includes(search))
+    : scoped.orders
+  const rows = sortOrders(matched, today, sortMode)
+  const columns = orderBoardColumns(matched, today)
 
   return [
     h(FilterBar, {
@@ -469,6 +475,14 @@ export function OrdersScreen(props) {
     h('div', { className: 'pmplan-row', key: 'head' },
       h('span', { className: 'pmplan-section-title' }, `工单 ${rows.length} 条`),
       h('span', { className: 'pmplan-spacer' }),
+      h('input', {
+        className: 'pmplan-input pmplan-search',
+        type: 'search',
+        placeholder: '搜工单编号 / 标题',
+        value: keyword,
+        'aria-label': '搜索工单',
+        onChange: (event) => setKeyword(event.target.value)
+      }),
       h(Button, { size: 'small', variant: mode === 'table' ? 'primary' : 'default', onClick: () => setMode('table') }, '列表'),
       h(Button, { size: 'small', variant: mode === 'board' ? 'primary' : 'default', onClick: () => setMode('board') }, '看板'),
       h(Select, {
@@ -486,7 +500,7 @@ export function OrdersScreen(props) {
     rows.length === 0
       ? h(Empty, {
           key: 'empty',
-          text: '当前筛选下没有工单。',
+          text: search ? `没有匹配「${keyword.trim()}」的工单。` : '当前筛选下没有工单。',
           action: h(Button, { variant: 'primary', onClick: () => onEditOrder(null) }, '新建工单')
         })
       : mode === 'table'
@@ -557,13 +571,27 @@ export function PlansScreen(props) {
   const { scoped, today, onOpenPlan, onEditPlan, onDelete } = props
   const [mode, setMode] = useState('table')
   const [sortMode, setSortMode] = useState('risk')
-  const rows = sortPlans(scoped.plans, today, sortMode)
+  const [keyword, setKeyword] = useState('')
+  // 计划搜索：按标题模糊匹配。
+  const search = keyword.trim().toLowerCase()
+  const matched = search
+    ? scoped.plans.filter((plan) => String(plan.title || '').toLowerCase().includes(search))
+    : scoped.plans
+  const rows = sortPlans(matched, today, sortMode)
   const buckets = PLAN_STATUS.map((status) => ({ status, items: rows.filter((plan) => plan.status === status) }))
 
   return [
     h('div', { className: 'pmplan-row', key: 'head' },
       h('span', { className: 'pmplan-section-title' }, `计划 ${rows.length} 条`),
       h('span', { className: 'pmplan-spacer' }),
+      h('input', {
+        className: 'pmplan-input pmplan-search',
+        type: 'search',
+        placeholder: '搜计划标题',
+        value: keyword,
+        'aria-label': '搜索计划',
+        onChange: (event) => setKeyword(event.target.value)
+      }),
       h(Button, { size: 'small', variant: mode === 'table' ? 'primary' : 'default', onClick: () => setMode('table') }, '列表'),
       h(Button, { size: 'small', variant: mode === 'board' ? 'primary' : 'default', onClick: () => setMode('board') }, '看板'),
       h(Select, {
@@ -580,7 +608,7 @@ export function PlansScreen(props) {
     rows.length === 0
       ? h(Empty, {
           key: 'empty',
-          text: '当前筛选下没有计划。',
+          text: search ? `没有匹配「${keyword.trim()}」的计划。` : '当前筛选下没有计划。',
           action: h(Button, { variant: 'primary', onClick: () => onEditPlan(null) }, '新建计划')
         })
       : mode === 'table'
@@ -814,6 +842,8 @@ export function DocsScreen(props) {
   const [kindFilter, setKindFilter] = useState('')
   const [projectFilter, setProjectFilter] = useState('')
   const [keyword, setKeyword] = useState('')
+  const [importFolder, setImportFolder] = useState('__keep__')
+  const [importNewFolder, setImportNewFolder] = useState('')
 
   const projectName = new Map(projects.map((project) => [project.id, project.name]))
   const rows = docs.filter((doc) => {
@@ -826,6 +856,15 @@ export function DocsScreen(props) {
     return true
   })
   const kinds = [...new Set(docs.map((doc) => doc.kind))]
+  // 文档库里已有的子目录（含各级父目录），供「导入到」下拉选择。
+  const folderChoices = [...new Set(docs.flatMap((doc) => {
+    const parts = String(doc.folder || '').split('/').filter(Boolean)
+    return parts.map((_, index) => parts.slice(0, index + 1).join('/'))
+  }))].sort()
+  // null = 保留所选目录结构；字符串 = 所有文件平铺进这个子目录。
+  const importTarget = importFolder === '__keep__'
+    ? null
+    : (importFolder === '__new__' ? importNewFolder.trim().replace(/^\/+|\/+$/g, '') : importFolder)
 
   const rootBar = h('div', { className: 'pmplan-card' },
     h('div', { className: 'pmplan-card-head' },
@@ -866,6 +905,10 @@ export function DocsScreen(props) {
     ),
     h('div', { className: 'pmplan-small pmplan-muted' },
       '只有你点按钮确认时工作台才会创建目录；文档本体一直在本机，不会上传到任何地方。'
+    ),
+    h('div', { className: 'pmplan-small pmplan-muted' },
+      '「导入文档」会把文件移动进文档库，原位置不再保留副本（同一个盘直接改名，跨盘是先复制成功再删原件）；'
+      + '拿不到本机路径的环境（普通浏览器）只能复制一份。'
     )
   )
 
@@ -897,17 +940,38 @@ export function DocsScreen(props) {
       allowEmpty: true,
       emptyLabel: '全部项目'
     }),
+    h('span', { className: 'pmplan-small pmplan-muted' }, '导入到'),
+    h(Select, {
+      value: importFolder,
+      onChange: setImportFolder,
+      options: [
+        { value: '__keep__', label: '保留所选目录结构' },
+        { value: '', label: '文档库根目录' },
+        ...folderChoices.map((folder) => ({ value: folder, label: folder })),
+        { value: '__new__', label: '新建子目录…' }
+      ]
+    }),
+    importFolder === '__new__'
+      ? h('input', {
+          className: 'pmplan-input',
+          style: { maxWidth: '190px' },
+          value: importNewFolder,
+          placeholder: '例如 2026/需求文档',
+          'aria-label': '新建子目录',
+          onChange: (event) => setImportNewFolder(event.target.value)
+        })
+      : null,
     h(Button, { onClick: onReloadDocs }, '刷新'),
     h(Button, { variant: 'primary', onClick: onNewDoc }, '新建 Markdown'),
     h('label', { className: 'pmplan-btn', 'data-variant': 'primary' },
-      docsUploading ? '上传中…' : '导入文档',
+      docsUploading ? '导入中…' : '导入文档',
       h('input', {
         type: 'file',
         multiple: true,
         style: { display: 'none' },
         onChange: (event) => {
           const files = [...(event.target.files || [])]
-          if (files.length) onUploadDocs(files)
+          if (files.length) onUploadDocs(files, importTarget)
           event.target.value = ''
         }
       })
@@ -959,7 +1023,7 @@ export function DocsScreen(props) {
             h('td', { className: 'pmplan-nums pmplan-muted' }, formatBytes(doc.size)),
             h('td', { className: 'pmplan-nums pmplan-muted' }, shortTime(doc.updatedAt || doc.addedAt)),
             h('td', { className: 'pmplan-cell-actions' },
-              h(Button, { size: 'small', onClick: () => onOpenDoc(doc) }, doc.editable ? '打开' : '用系统程序打开'),
+              h(Button, { size: 'small', onClick: () => onOpenDoc(doc) }, '打开'),
               doc.editable ? h(Button, { size: 'small', onClick: () => onEditDoc(doc) }, '编辑') : null,
               h(Button, { size: 'small', onClick: () => onEditDocMeta(doc) }, '属性'),
               h(Button, { size: 'small', variant: 'danger', onClick: () => onDeleteDoc(doc) }, '移除')

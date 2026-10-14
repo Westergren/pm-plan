@@ -160,6 +160,7 @@ export function apply(ctx, config) {
               name: payload.name,
               folder: payload.folder,
               base64: payload.base64,
+              sourcePath: payload.sourcePath,
               projectId: payload.projectId,
               orderId: payload.orderId,
               title: payload.title,

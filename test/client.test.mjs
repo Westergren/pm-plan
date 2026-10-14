@@ -130,7 +130,7 @@ test('各业务页签在有数据时都能渲染出内容', async () => {
     CalendarScreen: ['2026 年 10 月', '回到本月'],
     RisksScreen: ['已逾期'],
     ReportsScreen: ['草稿', '生成'],
-    DocsScreen: ['文档库位置', '需求说明书.md', '接口清单.xlsx', 'Markdown', 'Excel', '找不到', '导入文档', '新建 Markdown']
+    DocsScreen: ['文档库位置', '需求说明书.md', '接口清单.xlsx', 'Markdown', 'Excel', '找不到', '导入文档', '新建 Markdown', '导入到', '保留所选目录结构']
   }
   for (const [name, expected] of Object.entries(expectations)) {
     const Screen = screens[name]
@@ -140,6 +140,33 @@ test('各业务页签在有数据时都能渲染出内容', async () => {
     assert.ok(markup.length > 200, `${name} 渲染内容过少`)
     assert.ok(!markup.includes('undefined'), `${name} 渲染里出现 undefined`)
     for (const text of expected) assert.ok(markup.includes(text), `${name} 缺少「${text}」`)
+  }
+})
+
+test('文档页：列表按钮统一叫「打开」，「导入到」列出文档库已有子目录', async () => {
+  const state = normalizeState(sampleState(today))
+  const { exported, React } = await boot({ state, revision: 3 })
+  const screens = exported.screensApi
+  const noop = () => {}
+  const { renderToStaticMarkup } = await import('react-dom/server')
+  const docs = [
+    { id: 'd1', path: '手机银行/需求说明书.md', name: '需求说明书.md', folder: '手机银行', kind: 'markdown', editable: true, size: 10, projectId: '', orderId: '', title: '', tags: [], note: '', version: '', addedAt: '', updatedAt: '', missing: false },
+    { id: 'd2', path: '手机银行/二期/接口清单.xlsx', name: '接口清单.xlsx', folder: '手机银行/二期', kind: 'excel', editable: false, size: 10, projectId: '', orderId: '', title: '', tags: [], note: '', version: '', addedAt: '', updatedAt: '', missing: false }
+  ]
+  const props = {
+    docs, docsRoot: { root: '/tmp/库', exists: true, indexFile: '/tmp/库/index.json' }, docsRootDraft: '/tmp/库',
+    docsLoading: false, docsError: '', docsUploading: false, projects: [], orders: [],
+    onReloadDocs: noop, onSetDocsRootDraft: noop, onConfirmDocsRoot: noop, onPickDocsRoot: noop,
+    onUploadDocs: noop, onOpenDoc: noop, onEditDoc: noop, onEditDocMeta: noop, onDeleteDoc: noop,
+    onOpenProject: noop, onNewDoc: noop
+  }
+  const markup = renderToStaticMarkup(React.createElement(screens.DocsScreen, props))
+  // 列表里的打开按钮不再按类型分叉文案
+  assert.ok(!markup.includes('用系统程序打开'), '文档列表还在显示「用系统程序打开」')
+  assert.ok(markup.includes('>打开<'), '文档列表没有「打开」按钮')
+  // 「导入到」把文档库里出现过的各级子目录都列出来
+  for (const name of ['保留所选目录结构', '文档库根目录', '手机银行', '手机银行/二期', '新建子目录…']) {
+    assert.ok(markup.includes(name), `「导入到」缺少选项 ${name}`)
   }
 })
 
@@ -286,6 +313,50 @@ test('jsdom 挂载：计划列表没有「完成」勾选列，改状态要走�
     const posts = panel.fake.calls.filter((call) => call.method === 'POST')
     assert.ok(posts.length >= 1, '保存后没有写回')
     assert.ok(panel.fake.memory.state.plans.some((plan) => plan.status === '已完成'), '写回的数据里没有已完成的计划')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：工单按编号或标题搜索，计划按标题搜索', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    const tab = (name) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === name)
+    const rows = () => [...panel.document.querySelectorAll('.pmplan-table tbody tr')]
+    const heading = () => panel.document.querySelector('.pmplan-section-title').textContent
+
+    // 工单：标题命中
+    await panel.act(() => click(tab('工单')))
+    const orderSearch = panel.document.querySelector('[aria-label="搜索工单"]')
+    assert.ok(orderSearch, '工单页没有搜索框')
+    await panel.act(() => typeInto(panel, orderSearch, '限额'))
+    assert.equal(heading(), '工单 1 条')
+    assert.ok(rows()[0].textContent.includes('转账限额调整'), '标题匹配没生效')
+    assert.ok(!panel.document.body.textContent.includes('消息中心改版'), '不匹配的工单还在列表里')
+
+    // 工单：编号命中
+    await panel.act(() => typeInto(panel, orderSearch, 'WO-2603'))
+    assert.equal(heading(), '工单 1 条')
+    assert.ok(rows()[0].textContent.includes('指纹登录偶发失败修复'), '编号匹配没生效')
+
+    // 工单：搜不到时给出针对性提示
+    await panel.act(() => typeInto(panel, orderSearch, '不存在的关键字'))
+    assert.equal(heading(), '工单 0 条')
+    assert.ok(panel.document.body.textContent.includes('没有匹配「不存在的关键字」的工单'))
+
+    // 计划：按标题搜索，且与工单的搜索互不干扰
+    await panel.act(() => click(tab('计划')))
+    const planSearch = panel.document.querySelector('[aria-label="搜索计划"]')
+    assert.ok(planSearch, '计划页没有搜索框')
+    assert.equal(planSearch.value, '', '计划页搜索框不该继承工单页的关键字')
+    await panel.act(() => typeInto(panel, planSearch, '指纹'))
+    assert.equal(heading(), '计划 1 条')
+    assert.ok(rows()[0].textContent.includes('安卓指纹失败机型复现'), '计划标题匹配没生效')
+
+    // 搜索框是页内状态：离开页签后组件卸载，再回来是干净的（各页互不干扰）
+    await panel.act(() => click(tab('工单')))
+    assert.equal(panel.document.querySelector('[aria-label="搜索工单"]').value, '')
   } finally {
     await panel.cleanup()
   }
