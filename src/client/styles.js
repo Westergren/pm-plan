@@ -80,10 +80,17 @@ export const styles = `
 
 .pmplan-topbar-spacer { flex: 1 1 auto; min-width: 4px; }
 
+/* 固定宽度 + 右对齐：状态文字在「正在保存… / 未保存 / 已保存 · 修订 N」之间切换时，
+   宽度必须不变，否则它前面的顶栏按钮会跟着左右抖动。 */
 .pmplan-topbar-status {
+  flex: 0 0 120px;
+  text-align: right;
   color: var(--pm-fg-muted);
   font-size: 11.5px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
 
 .pmplan-topbar-status[data-tone="danger"] { color: var(--pm-danger); }
@@ -538,8 +545,13 @@ export const styles = `
   text-align: left;
   cursor: pointer;
 }
-.pmplan-note-item:hover { border-color: var(--pm-accent); }
-.pmplan-note-item-on { border-color: var(--pm-accent); background: var(--pm-accent-soft); }
+.pmplan-note-item:hover { border-color: var(--pm-border-strong); background: var(--pm-bg-soft); }
+/* 选中态用柔和的强调色：整块铺满 accent 太抢眼，正文才是主角。 */
+.pmplan-note-item-on,
+.pmplan-note-item-on:hover {
+  border-color: color-mix(in srgb, var(--pm-accent) 34%, var(--pm-border));
+  background: var(--pm-accent-soft);
+}
 .pmplan-note-item-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pmplan-note-item-time { font-size: 11px; color: var(--pm-fg-muted); }
 .pmplan-notes-editor { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
@@ -552,6 +564,18 @@ export const styles = `
   font-family: inherit;
   font-size: 13px;
   line-height: 1.6;
+  /* 大块输入区用淡边框，别把整页框成一个重颜色方块 */
+  border-color: var(--pm-border);
+  background: var(--pm-bg);
+  border-radius: var(--pm-radius);
+}
+/* 聚焦时用「淡边框 + 一层很浅的光晕」，替掉全局那个 2px 实心 outline——
+   编辑区面积大，实心描边会显得很吵。 */
+.pmplan-note-body:focus,
+.pmplan-note-body:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--pm-accent) 38%, var(--pm-border));
+  box-shadow: 0 0 0 3px var(--pm-accent-soft);
 }
 .pmplan-notes-blank {
   min-height: 320px;

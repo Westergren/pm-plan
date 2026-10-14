@@ -1088,6 +1088,30 @@ test('笔记样式：正文框撑到页面底部，删除只在右键菜单里',
   assert.ok(css.includes('.pmplan-note-menu-item {'), '没有右键菜单项样式')
 })
 
+test('顶栏状态与笔记样式：状态文字不再挤动按钮，选中与聚焦更浅', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const css = await readFile(new URL('../src/client/styles.js', import.meta.url), 'utf8')
+
+  // 状态文字在「正在保存… / 未保存 / 已保存 · 修订 N」之间切换，宽度必须固定，
+  // 否则它前面的顶栏按钮会跟着左右抖。
+  const status = css.slice(css.indexOf('.pmplan-topbar-status {'), css.indexOf('.pmplan-topbar-status[data-tone'))
+  assert.ok(status.includes('flex: 0 0'), '状态没有固定宽度，文字一变按钮就会抖')
+  assert.ok(status.includes('text-align: right'), '状态文字没有右对齐')
+  assert.ok(status.includes('text-overflow: ellipsis'), '状态过长会被硬裁掉')
+  assert.ok(status.includes('font-variant-numeric: tabular-nums'), '数字不等宽，修订号变化时仍会抖')
+
+  const items = css.slice(css.indexOf('.pmplan-note-item:hover'), css.indexOf('.pmplan-notes-editor {'))
+  assert.ok(items.includes('color-mix'), '选中态还是实心强调色边框')
+  assert.ok(!items.includes('border-color: var(--pm-accent);'), '选中态边框仍然是实心强调色')
+  assert.ok(items.includes('var(--pm-bg-soft)'), '悬停没有用更浅的底色')
+
+  const body = css.slice(css.indexOf('.pmplan-note-body {'), css.indexOf('.pmplan-notes-blank {'))
+  assert.ok(body.includes('border-color: var(--pm-border)'), '正文框边框不是淡边框')
+  assert.ok(body.includes('.pmplan-note-body:focus'), '正文框没有单独的聚焦样式')
+  assert.ok(body.includes('box-shadow: 0 0 0 3px'), '聚焦没有换成更浅的光晕')
+  assert.ok(body.includes('outline: none'), '聚焦时仍然叠着全局的实心 outline')
+})
+
 test('jsdom 挂载：「清空所有数据」保留笔记，清掉项目', async () => {
   const state = normalizeState({
     ...sampleState(today),
