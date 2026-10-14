@@ -1,11 +1,11 @@
 /**
- * 七个业务页签的视图组件。
+ * 八个业务页签的视图组件。
  *
  * 全部是纯展示：数据与回调都来自面板，组件自己不读写本机数据。
  */
 
 import { useState } from 'react'
-import { Badge, Button, Card, Empty, Kpi, Progress, Select, TextArea } from './ui.js'
+import { Badge, Button, Card, Empty, Kpi, Progress, Select, TextArea, cx } from './ui.js'
 import { BarList, Donut, StackedBars } from './charts.js'
 import {
   RISK_TONE,
@@ -24,7 +24,7 @@ import {
 import { groupByModule, groupByPlatform, sortOrders, sortPlans, weekBoard } from '../shared/views.js'
 import { REPORT_KINDS } from '../shared/report.js'
 import { WEEKDAY_LABELS, formatDate, formatDayLabel, formatShortDate, monthGrid, shiftMonth } from '../shared/date.js'
-import { PLAN_STATUS } from '../shared/model.js'
+import { MAX_NOTE_LENGTH, PLAN_STATUS } from '../shared/model.js'
 
 const h = require('react').createElement
 
@@ -1069,4 +1069,93 @@ export function DocsScreen(props) {
   ]
 }
 
-export { KIND_LABEL, formatBytes, shortTime }
+export { KIND_LABEL, formatBytes, shortTime, noteTitle }
+
+/* ---------------- 笔记 ---------------- */
+
+/**
+ * 列表行的标题：取正文第一行有内容的文本，过长截断；空笔记给一段占位。
+ * 笔记没有标题字段，列表只能从正文里现推一个能认人的标签。
+ */
+function noteTitle(text) {
+  const line = String(text || '').split('\n').find((item) => item.trim())
+  if (!line) return '（空笔记）'
+  const clean = line.trim()
+  return clean.length > 40 ? `${clean.slice(0, 40)}…` : clean
+}
+
+/**
+ * 笔记页：左列表 + 右编辑器的两栏速记本。
+ *
+ * 笔记刻意只存正文，没有标题、标签、置顶与关联，正文**按纯文本原样保存与显示**
+ * （不渲染 Markdown），写进去的 # 和 * 不会被吃掉。
+ * 列表按创建时间倒序：正文是每次击键都落盘的，若按更新时间排，正在写的那条
+ * 会每敲一个字就跳到列表最上面。
+ */
+export function NotesScreen(props) {
+  const { notes, selectedId, onSelect, onCreate, onChange, onDelete } = props
+  const [keyword, setKeyword] = useState('')
+
+  const search = keyword.trim().toLowerCase()
+  const ordered = [...notes].sort((left, right) => (
+    left.createdAt < right.createdAt ? 1 : left.createdAt > right.createdAt ? -1 : 0
+  ))
+  const matched = search
+    ? ordered.filter((note) => String(note.text || '').toLowerCase().includes(search))
+    : ordered
+  const selected = notes.find((note) => note.id === selectedId) || null
+
+  const list = h('aside', { className: 'pmplan-notes-list', 'aria-label': '笔记列表' },
+    h('div', { className: 'pmplan-notes-bar' },
+      h('input', {
+        className: 'pmplan-input pmplan-search',
+        type: 'search',
+        placeholder: '搜笔记正文',
+        value: keyword,
+        'aria-label': '搜索笔记',
+        onChange: (event) => setKeyword(event.target.value)
+      }),
+      h(Button, { variant: 'primary', size: 'small', onClick: onCreate }, '新建笔记')
+    ),
+    h('div', { className: 'pmplan-small pmplan-muted' },
+      matched.length === notes.length ? `共 ${notes.length} 条` : `${matched.length} / ${notes.length} 条`),
+    matched.length
+      ? matched.map((note) => h('button', {
+          key: note.id,
+          type: 'button',
+          className: cx('pmplan-note-item', note.id === selectedId && 'pmplan-note-item-on'),
+          'aria-pressed': note.id === selectedId ? 'true' : 'false',
+          onClick: () => onSelect(note.id)
+        },
+        h('span', { className: 'pmplan-note-item-title' }, noteTitle(note.text)),
+        h('span', { className: 'pmplan-note-item-time' }, shortTime(note.updatedAt))
+      ))
+      : h('div', { className: 'pmplan-small pmplan-muted' },
+          search ? '没有匹配的笔记。' : '还没有笔记，点「新建笔记」开始。')
+  )
+
+  const editor = selected
+    ? h('section', { className: 'pmplan-notes-editor' },
+        h('textarea', {
+          className: 'pmplan-input pmplan-note-body',
+          value: selected.text,
+          placeholder: '随手记点什么…（纯文本，原样保存）',
+          'aria-label': '笔记正文',
+          // 和服务端收敛用的上限保持一致：超长内容由浏览器直接挡住，而不是静默截断。
+          maxLength: MAX_NOTE_LENGTH,
+          onChange: (event) => onChange(selected.id, event.target.value)
+        }),
+        h('div', { className: 'pmplan-notes-foot' },
+          h('span', { className: 'pmplan-small pmplan-muted' },
+            `创建 ${shortTime(selected.createdAt)} · 更新 ${shortTime(selected.updatedAt)} · ${selected.text.length} 字`),
+          h('span', { className: 'pmplan-spacer' }),
+          h(Button, { size: 'small', variant: 'danger', onClick: () => onDelete(selected.id) }, '删除')
+        )
+      )
+    : h('section', { className: 'pmplan-notes-editor pmplan-notes-blank' },
+        h('span', { className: 'pmplan-muted' },
+          notes.length ? '在左边选一条笔记开始编辑。' : '还没有笔记，点「新建笔记」开始。')
+      )
+
+  return h('div', { className: 'pmplan-notes' }, list, editor)
+}

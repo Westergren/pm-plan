@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises'
 import {
   DEFAULT_MODULES,
   DEFAULT_PLATFORMS,
+  MAX_NOTE_LENGTH,
   ORDER_STAGES,
   createId,
   emptyState,
@@ -109,14 +110,40 @@ test('normalizeState 结果稳定：二次收敛不改变数据', () => {
     projects: [{ id: 'p1', name: 'A', progress: 30 }],
     orders: [{ id: 'o1', projectId: 'p1', title: 'B' }],
     plans: [{ id: 'n1', projectId: 'p1', orderId: 'o1', title: 'C', module: '甲' }],
-    logs: [{ refType: 'project', refId: 'p1', text: 'D' }]
+    logs: [{ refType: 'project', refId: 'p1', text: 'D' }],
+    notes: [{ id: 'k1', text: 'E', createdAt: '2026-10-01T00:00:00.000Z' }]
   })
   const twice = normalizeState(once)
   assert.deepEqual(twice, once)
 })
 
+test('笔记收敛：保留空正文、截断超长、丢弃脏数据与重复 id', () => {
+  const state = normalizeState({
+    notes: [
+      { id: 'note-1', text: '', createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-02T00:00:00.000Z' },
+      { id: 'note-1', text: '重复 id，后来的丢掉' },
+      null,
+      'not-an-object',
+      { id: 'note-2', text: 'x'.repeat(MAX_NOTE_LENGTH + 50) }
+    ]
+  })
+  // 空正文必须留下：用户点了「新建笔记」但还没写，那条笔记不能一落盘就消失。
+  assert.equal(state.notes.length, 2)
+  assert.equal(state.notes[0].id, 'note-1')
+  assert.equal(state.notes[0].text, '')
+  assert.equal(state.notes[0].createdAt, '2026-10-01T00:00:00.000Z')
+  assert.equal(state.notes[0].updatedAt, '2026-10-02T00:00:00.000Z')
+  assert.equal(state.notes[1].id, 'note-2')
+  assert.equal(state.notes[1].text.length, MAX_NOTE_LENGTH)
+  // 缺 updatedAt 时回落到 createdAt，而不是被刷成「刚刚」
+  assert.equal(state.notes[1].updatedAt, state.notes[1].createdAt)
+  // 收敛结果稳定，二次收敛不再变化
+  assert.deepEqual(normalizeState(state), state)
+})
+
 test('emptyState / nextStage', () => {
   assert.equal(emptyState().version, 1)
+  assert.deepEqual(emptyState().notes, [])
   assert.equal(nextStage('开发中'), '联调中')
   assert.equal(nextStage('已上线'), '')
   assert.equal(nextStage('不存在'), '')

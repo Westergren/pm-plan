@@ -500,6 +500,61 @@ export const styles = `
 /* ---------- 弹窗内的文档导入 ---------- */
 .pmplan-doc-import { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--pm-border); }
 
+/* ---------- 笔记（左列表 + 右编辑器） ---------- */
+/* 两栏：左边固定宽度的列表、右边自适应宽度的编辑器。min-width: 0 是必需的，
+   否则 textarea 的默认宽度会把网格列顶开、右边的编辑器溢出容器。 */
+.pmplan-notes {
+  display: grid;
+  grid-template-columns: minmax(190px, 290px) 1fr;
+  gap: 12px;
+  align-items: start;
+}
+.pmplan-notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 64vh;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.pmplan-notes-bar { display: flex; gap: 6px; }
+.pmplan-notes-bar .pmplan-search { flex: 1 1 auto; min-width: 0; max-width: none; }
+.pmplan-note-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--pm-border);
+  border-radius: var(--pm-radius-s);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pmplan-note-item:hover { border-color: var(--pm-accent); }
+.pmplan-note-item-on { border-color: var(--pm-accent); background: var(--pm-accent-soft); }
+.pmplan-note-item-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pmplan-note-item-time { font-size: 11px; color: var(--pm-fg-muted); }
+.pmplan-notes-editor { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pmplan-note-body {
+  width: 100%;
+  min-height: 320px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.pmplan-notes-blank {
+  min-height: 320px;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--pm-border);
+  border-radius: var(--pm-radius-s);
+}
+.pmplan-notes-foot { display: flex; align-items: center; gap: 8px; }
+
 /* ---------- 看板 ---------- */
 
 /* 阶段列按行平铺、放不下就换行，不再横向滚动（阶段多的时候也整页可见）。 */
@@ -861,6 +916,8 @@ export const styles = `
 
 @container pmplan (max-width: 900px) {
   .pmplan-body { flex-direction: column; }
+  .pmplan-notes { grid-template-columns: 1fr; }
+  .pmplan-notes-list { max-height: 240px; }
   .pmplan-filter-row { flex-direction: column; gap: 4px; }
   .pmplan-filter-label { width: auto; padding-top: 0; }
   .pmplan-smart { grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); }

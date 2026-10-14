@@ -1,8 +1,8 @@
 /**
  * 项目计划工作台面板。
  *
- * 顶栏（品牌 / 搜索 / 刷新 / 新建 / 设置 / 保存状态 / AI 会话）＋ 八个主导航页签
- * （概览 · 项目 · 工单 · 计划 · 文档 · 日历 · 风险 · 汇报）＋ 主内容区 ＋ 详情抽屉/编辑弹窗。
+ * 顶栏（品牌 / 搜索 / 刷新 / 新建 / 设置 / 保存状态 / AI 会话）＋ 九个主导航页签
+ * （概览 · 项目 · 工单 · 计划 · 文档 · 笔记 · 日历 · 风险 · 汇报）＋ 主内容区 ＋ 详情抽屉/编辑弹窗。
  *
  * 导航不再有左侧栏：筛选下沉到各自页面——概览用一排可点击的智能视图统计卡，
  * 项目与工单各有自己的「模块 + 端」筛查条。模块与端是**用户可配置项**，
@@ -45,7 +45,7 @@ import {
   Toast,
   injectStyles
 } from './ui.js'
-import { OverviewScreen, ProjectsScreen, OrdersScreen, PlansScreen, CalendarScreen, RisksScreen, ReportsScreen, DocsScreen } from './screens.js'
+import { OverviewScreen, ProjectsScreen, OrdersScreen, PlansScreen, CalendarScreen, RisksScreen, ReportsScreen, DocsScreen, NotesScreen } from './screens.js'
 import {
   DEFAULT_MODULES,
   DEFAULT_PLATFORMS,
@@ -83,6 +83,7 @@ const TABS = [
   { id: 'orders', label: '工单' },
   { id: 'plans', label: '计划' },
   { id: 'docs', label: '文档' },
+  { id: 'notes', label: '笔记' },
   { id: 'calendar', label: '日历' },
   { id: 'risks', label: '风险' },
   { id: 'reports', label: '汇报' }
@@ -197,6 +198,8 @@ export function PlanWorkbench({ service, entry, conversation }) {
   const [docConfirm, setDocConfirm] = useState(null)
   const [folderPrompt, setFolderPrompt] = useState(null)
   const [folderConfirm, setFolderConfirm] = useState(null)
+  // 选中的笔记放在面板层（而不是笔记页内部）：离开页签再回来，两栏里右栏还停在原来那条。
+  const [selectedNoteId, setSelectedNoteId] = useState('')
   const saveTimer = useRef(null)
   const toastTimer = useRef(null)
   const dataRef = useRef(data)
@@ -287,6 +290,7 @@ export function PlanWorkbench({ service, entry, conversation }) {
   const orders = data.state.orders
   const plans = data.state.plans
   const logs = data.state.logs
+  const notes = data.state.notes
   const config = data.state.config
 
   // 可配置维度的候选值：配置项 + 数据里出现过的历史取值，两边都不会丢。
@@ -369,6 +373,11 @@ export function PlanWorkbench({ service, entry, conversation }) {
   }, [mutate])
 
   const removeItem = useCallback((type, id) => {
+    if (type === 'note') {
+      mutate((state) => ({ ...state, notes: state.notes.filter((note) => note.id !== id) }), '已删除笔记')
+      setSelectedNoteId((current) => (current === id ? '' : current))
+      return
+    }
     mutate((state) => {
       if (type === 'project') {
         // 工单与计划都挂在模块上，不归项目——删项目只删项目自己与它的进展记录。
@@ -392,6 +401,28 @@ export function PlanWorkbench({ service, entry, conversation }) {
       ...state,
       orders: replaceById(state.orders, { ...order, stage, updatedAt: new Date().toISOString() })
     }), `工单状态：${stage}`)
+  }, [mutate])
+
+  /* ---------------- 笔记 ---------------- */
+
+  /** 新建一条空笔记并立刻选中；空正文会被 normalizeState 保留，不会一点就消失。 */
+  const addNote = useCallback(() => {
+    const now = new Date().toISOString()
+    const note = { id: createId('note'), text: '', createdAt: now, updatedAt: now }
+    mutate((state) => ({ ...state, notes: [note, ...state.notes] }), '已新建笔记')
+    setSelectedNoteId(note.id)
+  }, [mutate])
+
+  /**
+   * 改正文。正文是**每次击键**都进内存状态的（落盘由 mutate 的 500ms 延迟合并），
+   * 所以这里只按 id 精确替换被编辑的那一条，不碰其他笔记的字段。
+   */
+  const updateNote = useCallback((id, text) => {
+    const at = new Date().toISOString()
+    mutate((state) => ({
+      ...state,
+      notes: state.notes.map((note) => (note.id === id ? { ...note, text, updatedAt: at } : note))
+    }))
   }, [mutate])
 
   const addLog = useCallback((refType, refId) => {
@@ -808,6 +839,16 @@ export function PlanWorkbench({ service, entry, conversation }) {
         onDeleteFolder: (folder) => setFolderConfirm(folder)
       })
     }
+    if (view === 'notes') {
+      return h(NotesScreen, {
+        notes,
+        selectedId: selectedNoteId,
+        onSelect: setSelectedNoteId,
+        onCreate: addNote,
+        onChange: updateNote,
+        onDelete: (id) => setConfirm({ type: 'note', id })
+      })
+    }
     if (view === 'calendar') return h(CalendarScreen, plainProps)
     if (view === 'risks') return h(RisksScreen, plainProps)
     return h(ReportsScreen, plainProps)
@@ -992,7 +1033,10 @@ export function PlanWorkbench({ service, entry, conversation }) {
                 projects: [],
                 orders: [],
                 plans: [],
-                logs: []
+                logs: [],
+                // 笔记是私人速记、不是业务数据，清空业务数据时**原样保留**。
+                // 漏掉这一行的话，缺字段会在落盘收敛时变成空数组，笔记就被静默清空了。
+                notes: state.notes
               }), '已清空全部数据')
               setConfirm(null)
               return
@@ -1677,14 +1721,20 @@ function FolderConfirmModal({ folder, onClose, onRemoveOnly, onDeleteFiles }) {
   )
 }
 
+/**
+ * 确认弹窗的说明文案：按被删对象讲清后果。
+ * 「清空」刻意**不含笔记**——笔记是私人速记，不属于业务数据，清空业务数据时保留。
+ */
+const CONFIRM_LABEL = {
+  clear: '清空所有数据（项目、工单、计划、进展记录；笔记保留）',
+  note: '删除这条笔记',
+  project: '删除该项目及其下的计划与进展记录（工单挂在模块上，不受影响）',
+  order: '删除该工单（关联计划的关联关系会解除）',
+  plan: '删除该计划'
+}
+
 function ConfirmModal({ payload, onClose, onConfirm }) {
-  const label = payload.type === 'clear'
-    ? '清空所有数据（项目、工单、计划、进展记录）'
-    : payload.type === 'project'
-      ? '删除该项目及其下的计划与进展记录（工单挂在模块上，不受影响）'
-      : payload.type === 'order'
-        ? '删除该工单（关联计划的关联关系会解除）'
-        : '删除该计划'
+  const label = CONFIRM_LABEL[payload.type] || '删除该计划'
   return h(Modal, {
     title: '确认操作',
     onClose,

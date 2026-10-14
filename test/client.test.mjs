@@ -283,7 +283,12 @@ function click(element) {
  * 必须走原生 setter 绕过 tracker，再派发 input 事件。
  */
 function typeInto(panel, element, value) {
-  const setter = Object.getOwnPropertyDescriptor(panel.dom.window.HTMLInputElement.prototype, 'value').set
+  // textarea 与 input 是两个不同的原型：用错原型拿到的 setter 依然能赋值，
+  // 但绕不开对应元素上的 value tracker，事件会被 React 判成「值没变」而不触发 onChange。
+  const proto = element.tagName === 'TEXTAREA'
+    ? panel.dom.window.HTMLTextAreaElement.prototype
+    : panel.dom.window.HTMLInputElement.prototype
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value').set
   setter.call(element, value)
   element.dispatchEvent(new panel.dom.window.Event('input', { bubbles: true }))
 }
@@ -935,4 +940,138 @@ test('看板样式：阶段列按行平铺，不再横向滚动；卡片标题�
   )
   const block = css.slice(css.indexOf('.pmplan-btn-block'), css.indexOf('.pmplan-btn-block:hover'))
   assert.ok(block.includes('white-space: normal'), '卡片标题按钮仍然禁止换行')
+})
+
+/* ---------------- 笔记 ---------------- */
+
+test('笔记页签排在「文档」之后、「日历」之前', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    const labels = [...panel.document.querySelectorAll('[role="tab"]')].map((node) => node.textContent)
+    assert.deepEqual(labels, ['概览', '项目', '工单', '计划', '文档', '笔记', '日历', '风险', '汇报'])
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：笔记页是左列表 + 右编辑器的两栏，正文原样显示', async () => {
+  const state = normalizeState({
+    ...sampleState(today),
+    notes: [
+      { id: 'note-b', text: '第二条\n带换行的正文', createdAt: '2026-10-09T02:00:00.000Z', updatedAt: '2026-10-09T02:00:00.000Z' },
+      { id: 'note-a', text: '第一条 # 不是标题 * 不是列表', createdAt: '2026-10-08T02:00:00.000Z', updatedAt: '2026-10-08T02:00:00.000Z' }
+    ]
+  })
+  const panel = await mountPanel({ state })
+  try {
+    await panel.flush()
+    const tab = (label) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === label)
+    await panel.act(() => click(tab('笔记')))
+
+    const list = panel.document.querySelector('aside.pmplan-notes-list')
+    const editor = panel.document.querySelector('.pmplan-notes-editor')
+    assert.ok(list, '没有左列表')
+    assert.ok(editor, '没有右编辑器')
+    assert.ok(list.textContent.includes('共 2 条'), '列表没有显示条数')
+    // 列表按创建时间倒序；行标题取正文第一行
+    const items = [...list.querySelectorAll('.pmplan-note-item')]
+    assert.deepEqual(
+      items.map((node) => node.querySelector('.pmplan-note-item-title').textContent),
+      ['第二条', '第一条 # 不是标题 * 不是列表']
+    )
+    // 没选中时右栏给提示，不是一片空白
+    assert.ok(editor.textContent.includes('在左边选一条笔记开始编辑'), '未选中时右栏没有提示')
+
+    // 选中第一条：正文进 textarea，换行与 # / * 原样保留（不渲染 Markdown）
+    await panel.act(() => click(items[0]))
+    assert.equal(panel.document.querySelector('.pmplan-note-body').value, '第二条\n带换行的正文')
+    assert.equal(panel.document.querySelectorAll('.pmplan-note-body').length, 1, '右栏只应有一个正文输入框')
+
+    // 搜索按正文过滤
+    const search = list.querySelector('input[type="search"]')
+    await panel.act(() => typeInto(panel, search, '带换行'))
+    assert.deepEqual(
+      [...panel.document.querySelectorAll('.pmplan-note-item')].map((node) => node.querySelector('.pmplan-note-item-title').textContent),
+      ['第二条']
+    )
+    assert.ok(list.textContent.includes('1 / 2 条'), '过滤后没有显示命中数')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：新建笔记留下空条目，正文每次击键都落盘，删除需确认', async () => {
+  const panel = await mountPanel({ state: normalizeState({ ...EMPTY, notes: [] }) })
+  try {
+    await panel.flush()
+    const tab = (label) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === label)
+    await panel.act(() => click(tab('笔记')))
+    assert.ok(panel.document.body.textContent.includes('还没有笔记'), '空态没有提示')
+
+    await panel.act(() => click([...panel.document.querySelectorAll('button')].find((node) => node.textContent === '新建笔记')))
+    const items = () => [...panel.document.querySelectorAll('.pmplan-note-item')]
+    // 空笔记必须留下，否则「新建笔记」看起来像按钮失灵
+    assert.equal(items().length, 1, '新建的空笔记被吃掉了')
+    assert.equal(items()[0].querySelector('.pmplan-note-item-title').textContent, '（空笔记）')
+    // 新笔记自动选中，右栏可直接开写
+    const body = panel.document.querySelector('.pmplan-note-body')
+    assert.ok(body, '新建后右栏没有编辑器')
+
+    await panel.act(() => typeInto(panel, body, '今天要和陈方园确认排期'))
+    assert.equal(items()[0].querySelector('.pmplan-note-item-title').textContent, '今天要和陈方园确认排期')
+    // mutate 有 500ms 延迟合并，等过它再断言服务端内存里的正文
+    await panel.flush(700)
+    assert.equal(panel.fake.memory.state.notes.length, 1)
+    assert.equal(panel.fake.memory.state.notes[0].text, '今天要和陈方园确认排期')
+
+    // 删除要过确认弹窗，取消则保留
+    const del = [...panel.document.querySelectorAll('button')].find((node) => node.textContent === '删除')
+    await panel.act(() => click(del))
+    const confirmDialog = [...panel.document.querySelectorAll('[role="dialog"]')].pop()
+    assert.ok(confirmDialog.textContent.includes('删除这条笔记'), '确认文案不对')
+    await panel.act(() => click([...confirmDialog.querySelectorAll('button')].find((node) => node.textContent === '取消')))
+    assert.equal(items().length, 1, '取消后笔记不该被删')
+
+    await panel.act(() => click([...panel.document.querySelectorAll('button')].find((node) => node.textContent === '删除')))
+    const again = [...panel.document.querySelectorAll('[role="dialog"]')].pop()
+    await panel.act(() => click([...again.querySelectorAll('button')].find((node) => node.textContent === '确认执行')))
+    await panel.flush(700)
+    assert.equal(items().length, 0, '确认后笔记没有被删除')
+    assert.equal(panel.fake.memory.state.notes.length, 0)
+    assert.ok(panel.document.body.textContent.includes('还没有笔记'), '删空后没有回到空态')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：「清空所有数据」保留笔记，清掉项目', async () => {
+  const state = normalizeState({
+    ...sampleState(today),
+    notes: [{ id: 'note-keep', text: '别把我清掉', createdAt: '2026-10-09T02:00:00.000Z', updatedAt: '2026-10-09T02:00:00.000Z' }]
+  })
+  const panel = await mountPanel({ state })
+  try {
+    await panel.flush()
+    assert.ok(panel.fake.memory.state.projects.length > 0, '示例数据没有项目')
+
+    await panel.act(() => click([...panel.document.querySelectorAll('button')].find((node) => node.textContent === '设置')))
+    const settings = [...panel.document.querySelectorAll('[role="dialog"]')].pop()
+    const clearButton = [...settings.querySelectorAll('button')].find((node) => node.textContent === '清空全部数据')
+    assert.ok(clearButton, '设置里没有「清空全部数据」按钮')
+    await panel.act(() => click(clearButton))
+
+    const confirmDialog = [...panel.document.querySelectorAll('[role="dialog"]')].pop()
+    // 文案必须写清笔记不在清空范围内，否则用户会以为都删了
+    assert.ok(confirmDialog.textContent.includes('笔记保留'), '清空确认没有声明笔记会被保留')
+    await panel.act(() => click([...confirmDialog.querySelectorAll('button')].find((node) => node.textContent === '确认执行')))
+    await panel.flush(700)
+
+    const after = panel.fake.memory.state
+    assert.equal(after.projects.length, 0, '项目没有被清空')
+    assert.equal(after.orders.length, 0, '工单没有被清空')
+    assert.deepEqual(after.notes.map((note) => note.text), ['别把我清掉'], '笔记被清空连带删掉了')
+  } finally {
+    await panel.cleanup()
+  }
 })

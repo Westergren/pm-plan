@@ -8,7 +8,8 @@
  *   projects: [{ id, code, name, module, platform, status, owner, startedOn, dueDate, progress, link, summary, tags, createdAt, updatedAt }],
  *   orders:   [{ id, code, module, title, kind, priority, stage, owner, target, dueDate, createdOn, description, createdAt, updatedAt }],
  *   plans:    [{ id, module, title, owner, status, startedOn, dueDate, note, createdAt, updatedAt }],
- *   logs:     [{ id, refType, refId, at, kind, text }]
+ *   logs:     [{ id, refType, refId, at, kind, text }],
+ *   notes:    [{ id, text, createdAt, updatedAt }]
  * }
  *
  * 工单与计划都不再归属某个项目，而是直接挂「模块」（order.module / plan.module）。
@@ -35,6 +36,12 @@ export const MAX_DIMENSION_ITEMS = 24
 
 /** 项目编号 / 工单编号的长度上限。 */
 export const MAX_CODE_LENGTH = 40
+
+/**
+ * 单条笔记的正文长度上限。笔记是纯正文速记，没有标题字段，所以这个上限就是
+ * 整条笔记的上限；收敛时按字符截断，避免状态文件被一段粘贴内容撑坏。
+ */
+export const MAX_NOTE_LENGTH = 20000
 
 export const ORDER_KINDS = ['迭代需求', '变更需求', '缺陷', '技术任务']
 
@@ -73,7 +80,8 @@ export function emptyState(now = new Date().toISOString()) {
     projects: [],
     orders: [],
     plans: [],
-    logs: []
+    logs: [],
+    notes: []
   }
 }
 
@@ -159,6 +167,7 @@ export function normalizeState(raw, { now = new Date().toISOString() } = {}) {
   const orders = []
   const plans = []
   const logs = []
+  const notes = []
 
   // 可配置维度先于业务数据收敛：项目的模块/端缺省值要按它回落。
   const config = {
@@ -276,6 +285,27 @@ export function normalizeState(raw, { now = new Date().toISOString() } = {}) {
 
   logs.sort((left, right) => (left.at < right.at ? 1 : left.at > right.at ? -1 : 0))
 
+  // 笔记是纯正文速记：除了正文只有两个时间戳，不挂任何业务对象。
+  // 空正文**故意保留**——用户点了「新建笔记」但还没开始写，那条笔记必须留在列表里，
+  // 否则一落盘就被收敛掉，界面看起来像按钮失灵。
+  const noteIds = new Set()
+  for (const item of Array.isArray(source.notes) ? source.notes : []) {
+    if (!item || typeof item !== 'object') continue
+    const id = asText(item.id).trim() || createId('note')
+    // 重复 id 会让列表 key 冲突、让「选中的那条」指错人，直接丢弃后来的。
+    if (noteIds.has(id)) continue
+    noteIds.add(id)
+    const text = asText(item.text).slice(0, MAX_NOTE_LENGTH)
+    const createdAt = asStamp(item.createdAt, now)
+    notes.push({
+      id,
+      text,
+      createdAt,
+      updatedAt: asStamp(item.updatedAt, createdAt)
+    })
+    if (notes.length >= 2000) break
+  }
+
   return {
     version: STATE_VERSION,
     updatedAt: asStamp(source.updatedAt, now),
@@ -284,7 +314,8 @@ export function normalizeState(raw, { now = new Date().toISOString() } = {}) {
     projects,
     orders,
     plans,
-    logs
+    logs,
+    notes
   }
 }
 
