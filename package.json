@@ -1,6 +1,6 @@
 {
   "name": "dsh-workbench-pm-plan",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "private": true,
   "description": "项目计划工作台：多端项目的需求变更工单、工作计划、跟进事项、需求文档库、风险与周季报，一屏管到底。",
   "repository": {

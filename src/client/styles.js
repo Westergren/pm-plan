@@ -480,6 +480,26 @@ export const styles = `
 .pmplan-title-cell { font-weight: 600; }
 .pmplan-clickable { cursor: pointer; }
 
+/* ---------- 文档库目录 ---------- */
+.pmplan-folder-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.pmplan-folder-row + .pmplan-folder-row { border-top: 1px solid var(--pm-border); }
+.pmplan-folder-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.pmplan-folder-name:hover { color: var(--pm-accent); }
+
+/* ---------- 弹窗内的文档导入 ---------- */
+.pmplan-doc-import { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--pm-border); }
+
 /* ---------- 看板 ---------- */
 
 /* 阶段列按行平铺、放不下就换行，不再横向滚动（阶段多的时候也整页可见）。 */

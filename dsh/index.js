@@ -215,6 +215,15 @@ export function apply(ctx, config) {
         if (payload.action === 'rename') {
           return json(await docs.renameDoc(payload.path, payload.name))
         }
+        if (payload.action === 'createFolder') {
+          return json(await docs.createFolder(payload.path))
+        }
+        if (payload.action === 'renameFolder') {
+          return json(await docs.renameFolder(payload.path, payload.name))
+        }
+        if (payload.action === 'deleteFolder') {
+          return json(await docs.deleteFolder(payload.path, { deleteFiles: payload.deleteFiles === true }))
+        }
         throw new DocsError('未知操作。')
       } catch (error) {
         return failureWithStatus(error)

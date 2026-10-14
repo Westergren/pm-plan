@@ -15,10 +15,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ApiError,
+  createFolder,
+  deleteFolder,
   docAction,
   readDoc,
   readDocs,
   readState,
+  renameFolder,
   setDocsRoot,
   updateDocMeta,
   uploadDoc,
@@ -183,6 +186,7 @@ export function PlanWorkbench({ service, entry, conversation }) {
   const [reportText, setReportText] = useState('')
   const [logDraft, setLogDraft] = useState({ kind: '进展', text: '' })
   const [docs, setDocs] = useState([])
+  const [folders, setFolders] = useState([])
   const [docsRoot, setDocsRootInfo] = useState(null)
   const [docsRootDraft, setDocsRootDraft] = useState('')
   const [docsLoading, setDocsLoading] = useState(false)
@@ -191,6 +195,8 @@ export function PlanWorkbench({ service, entry, conversation }) {
   const [docEditor, setDocEditor] = useState(null)
   const [docMeta, setDocMeta] = useState(null)
   const [docConfirm, setDocConfirm] = useState(null)
+  const [folderPrompt, setFolderPrompt] = useState(null)
+  const [folderConfirm, setFolderConfirm] = useState(null)
   const saveTimer = useRef(null)
   const toastTimer = useRef(null)
   const dataRef = useRef(data)
@@ -330,22 +336,6 @@ export function PlanWorkbench({ service, entry, conversation }) {
     return plans.find((item) => item.id === drawer.id) || null
   }, [drawer, projects, orders, plans])
 
-  const saveProject = useCallback((form) => {
-    const now = new Date().toISOString()
-    const payload = { ...form, id: form.id || createId('prj'), createdAt: form.createdAt || now, updatedAt: now, tags: form.tags || [] }
-    mutate((state) => ({ ...state, projects: replaceById(state.projects, payload) }), '项目已保存')
-    setEditor(null)
-    setDrawer({ type: 'project', id: payload.id })
-  }, [mutate])
-
-  const saveOrder = useCallback((form) => {
-    const now = new Date().toISOString()
-    const payload = { ...form, id: form.id || createId('ord'), createdAt: form.createdAt || now, updatedAt: now }
-    mutate((state) => ({ ...state, orders: replaceById(state.orders, payload) }), '工单已保存')
-    setEditor(null)
-    setDrawer({ type: 'order', id: payload.id })
-  }, [mutate])
-
   const savePlan = useCallback((form) => {
     const now = new Date().toISOString()
     const payload = { ...form, id: form.id || createId('pln'), createdAt: form.createdAt || now, updatedAt: now }
@@ -421,6 +411,7 @@ export function PlanWorkbench({ service, entry, conversation }) {
     try {
       const payload = await readDocs()
       setDocs(Array.isArray(payload.documents) ? payload.documents : [])
+      setFolders(Array.isArray(payload.folders) ? payload.folders : [])
       setDocsRootInfo({ root: payload.root, exists: true, indexFile: payload.indexFile || '' })
       setDocsRootDraft((current) => current || payload.root)
     } catch (docsLoadError) {
@@ -434,6 +425,42 @@ export function PlanWorkbench({ service, entry, conversation }) {
       setDocsLoading(false)
     }
   }, [])
+
+  /**
+   * 把编辑弹窗里刚导入的文档挂到刚保存的条目上。
+   * 导入是即时写盘，挂靠靠的是文档属性里的 projectId / orderId，所以保存后单独补一次。
+   */
+  const linkImportedDocs = useCallback(async (paths, patch) => {
+    const list = (paths || []).filter(Boolean)
+    if (!list.length) return
+    try {
+      await Promise.all(list.map((path) => updateDocMeta(path, patch)))
+      await loadDocs()
+    } catch (linkError) {
+      setDocsError(linkError instanceof ApiError ? linkError.message : '文档挂靠失败，可以到「需求文档」页手工挂。')
+    }
+  }, [loadDocs])
+
+  const saveProject = useCallback((form) => {
+    const now = new Date().toISOString()
+    // importedDocPaths 只是弹窗传回来的临时字段，不能写进项目对象。
+    const { importedDocPaths, ...rest } = form
+    const payload = { ...rest, id: rest.id || createId('prj'), createdAt: rest.createdAt || now, updatedAt: now, tags: rest.tags || [] }
+    mutate((state) => ({ ...state, projects: replaceById(state.projects, payload) }), '项目已保存')
+    setEditor(null)
+    setDrawer({ type: 'project', id: payload.id })
+    linkImportedDocs(importedDocPaths, { projectId: payload.id })
+  }, [mutate, linkImportedDocs])
+
+  const saveOrder = useCallback((form) => {
+    const now = new Date().toISOString()
+    const { importedDocPaths, ...rest } = form
+    const payload = { ...rest, id: rest.id || createId('ord'), createdAt: rest.createdAt || now, updatedAt: now }
+    mutate((state) => ({ ...state, orders: replaceById(state.orders, payload) }), '工单已保存')
+    setEditor(null)
+    setDrawer({ type: 'order', id: payload.id })
+    linkImportedDocs(importedDocPaths, { orderId: payload.id })
+  }, [mutate, linkImportedDocs])
 
   const confirmDocsRoot = useCallback(async () => {
     try {
@@ -471,6 +498,7 @@ export function PlanWorkbench({ service, entry, conversation }) {
       }
       let moved = 0
       let copied = 0
+      const created = []
       for (const file of list) {
         const source = filePathOf(file)
         const relative = commonDir && source.startsWith(commonDir)
@@ -487,7 +515,8 @@ export function PlanWorkbench({ service, entry, conversation }) {
           ? (clean.includes('/') ? clean.slice(0, clean.lastIndexOf('/')) : '')
           : targetFolder
         const base64 = source ? '' : await fileToBase64(file)
-        await uploadDoc({ name, folder, base64, sourcePath: source })
+        const doc = await uploadDoc({ name, folder, base64, sourcePath: source })
+        created.push({ id: doc.id, path: doc.path, name: doc.name })
         if (source) moved += 1
         else copied += 1
       }
@@ -496,8 +525,10 @@ export function PlanWorkbench({ service, entry, conversation }) {
       if (moved) parts.push(`移动 ${moved} 个`)
       if (copied) parts.push(`复制 ${copied} 个`)
       showToast(`已导入 ${list.length} 个文档（${parts.join('，')}）`)
+      return created
     } catch (uploadError) {
       setDocsError(uploadError instanceof ApiError ? uploadError.message : '导入文档失败。')
+      return []
     } finally {
       setDocsUploading(false)
     }
@@ -572,6 +603,46 @@ export function PlanWorkbench({ service, entry, conversation }) {
       showToast(deleteFile ? '文件已删除' : '已从索引移除，文件仍在原处')
     } catch (removeError) {
       setDocsError(removeError instanceof ApiError ? removeError.message : '移除失败。')
+    }
+  }, [loadDocs, showToast])
+
+  /** 目录条目：打开用系统访达（服务端 `open` 对目录就是打开访达窗口）。 */
+  const openFolder = useCallback(async (folder) => {
+    try {
+      await docAction(folder.path, 'open')
+    } catch (openError) {
+      setDocsError(openError instanceof ApiError ? openError.message : '打开文件夹失败。')
+    }
+  }, [])
+
+  const submitFolderPrompt = useCallback(async (folder, name) => {
+    const clean = String(name || '').trim().replace(/^\/+|\/+$/g, '')
+    if (!clean) {
+      setDocsError('目录名不能为空。')
+      return
+    }
+    try {
+      if (folder) await renameFolder(folder.path, clean)
+      else await createFolder(clean)
+      setFolderPrompt(null)
+      await loadDocs()
+      showToast(folder ? '目录已重命名' : '目录已新建')
+    } catch (folderError) {
+      setDocsError(folderError instanceof ApiError ? folderError.message : '目录操作失败。')
+    }
+  }, [loadDocs, showToast])
+
+  const removeFolder = useCallback(async (folder, deleteFiles) => {
+    try {
+      const result = await deleteFolder(folder.path, Boolean(deleteFiles))
+      setFolderConfirm(null)
+      await loadDocs()
+      const count = Number(result && result.removed) || 0
+      showToast(deleteFiles
+        ? `目录已删除，连同 ${count} 个文件`
+        : `已从索引移除${count ? ` ${count} 个文件` : ''}，磁盘上的目录仍在原处`)
+    } catch (folderError) {
+      setDocsError(folderError instanceof ApiError ? folderError.message : '删除目录失败。')
     }
   }, [loadDocs, showToast])
 
@@ -729,7 +800,12 @@ export function PlanWorkbench({ service, entry, conversation }) {
         onEditDocMeta: (doc) => setDocMeta(doc),
         onDeleteDoc: (doc) => setDocConfirm(doc),
         onOpenProject: openProject,
-        onNewDoc: createDoc
+        onNewDoc: createDoc,
+        folders,
+        onOpenFolder: openFolder,
+        onNewFolder: () => setFolderPrompt({ folder: null }),
+        onRenameFolder: (folder) => setFolderPrompt({ folder }),
+        onDeleteFolder: (folder) => setFolderConfirm(folder)
       })
     }
     if (view === 'calendar') return h(CalendarScreen, plainProps)
@@ -851,8 +927,11 @@ export function PlanWorkbench({ service, entry, conversation }) {
           form: editor.form,
           projects,
           orders,
+          docs,
+          folders,
           moduleNames,
           platformNames,
+          onImportDocs: uploadDocs,
           onClose: () => setEditor(null),
           onSubmit: editor.type === 'project' ? saveProject : editor.type === 'order' ? saveOrder : savePlan
         })
@@ -883,6 +962,21 @@ export function PlanWorkbench({ service, entry, conversation }) {
           onClose: () => setDocConfirm(null),
           onRemoveOnly: () => removeDoc(docConfirm, false),
           onDeleteFile: () => removeDoc(docConfirm, true)
+        })
+      : null,
+    folderPrompt
+      ? h(FolderNameModal, {
+          folder: folderPrompt.folder || null,
+          onClose: () => setFolderPrompt(null),
+          onSubmit: (name) => submitFolderPrompt(folderPrompt.folder || null, name)
+        })
+      : null,
+    folderConfirm
+      ? h(FolderConfirmModal, {
+          folder: folderConfirm,
+          onClose: () => setFolderConfirm(null),
+          onRemoveOnly: () => removeFolder(folderConfirm, false),
+          onDeleteFiles: () => removeFolder(folderConfirm, true)
         })
       : null,
     confirm
@@ -1024,6 +1118,24 @@ function DetailDrawer({ type, item, projects, orders, plans, logs, docs, today, 
         ]
       }),
       item.description ? h(Card, { title: '描述' }, h('div', { className: 'pmplan-soft' }, item.description)) : null,
+      h(Card, {
+        title: `关联需求文档（${(docs || []).filter((doc) => doc.orderId === item.id).length}）`,
+        actions: h(Button, { size: 'small', onClick: () => onSelectView('docs') }, '去文档页')
+      },
+        (docs || []).filter((doc) => doc.orderId === item.id).length
+          ? h('div', { className: 'pmplan-col' }, (docs || []).filter((doc) => doc.orderId === item.id).map((doc) => h('div', {
+              key: doc.path,
+              className: 'pmplan-item'
+            },
+              h('span', { className: 'pmplan-item-title' }, doc.name),
+              h('span', { className: 'pmplan-item-meta' },
+                doc.missing ? h(Badge, { tone: 'danger', children: '找不到' }) : null,
+                doc.version ? `版本 ${doc.version}` : '',
+                doc.tags && doc.tags.length ? doc.tags.join('、') : ''
+              )
+            )))
+          : h('div', { className: 'pmplan-small pmplan-muted' }, '还没有关联文档。可以在「编辑」里直接导入，文档会挂到这个工单上。')
+      ),
       h(Card, { title: '状态流转' },
         h('div', { className: 'pmplan-row' },
           ORDER_STAGES.map((stage) => h(Button, {
@@ -1107,8 +1219,13 @@ function LogComposer({ draft, setDraft, onSubmit }) {
 
 /* ---------------- 编辑弹窗 ---------------- */
 
-function EditorModal({ type, form, projects, orders, moduleNames, platformNames, onClose, onSubmit }) {
+function EditorModal({ type, form, projects, orders, docs = [], folders = [], moduleNames, platformNames, onImportDocs, onClose, onSubmit }) {
   const [draft, setDraft] = useState(form)
+  const [pendingDocs, setPendingDocs] = useState([])
+  const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState('')
+  const [importFolder, setImportFolder] = useState('__keep__')
+  const [importNewFolder, setImportNewFolder] = useState('')
   const set = (patch) => setDraft((current) => ({ ...current, ...patch }))
   const title = type === 'project'
     ? (draft.id ? '编辑项目' : '新建项目')
@@ -1174,15 +1291,97 @@ function EditorModal({ type, form, projects, orders, moduleNames, platformNames,
     h(TextArea, { key: 'note', label: '备注', value: draft.note, onChange: (value) => set({ note: value }), placeholder: '产出物、依赖、风险' })
   ]
 
+  // 文档：项目/工单弹窗里可以直接导入（文件或文件夹），保存后自动挂到这个条目上。
+  // 新建时还没有 id，所以先在本地攒着，点保存时把路径一起交给 saveProject / saveOrder。
+  const linkedDocs = draft.id
+    ? docs.filter((doc) => (type === 'project' ? doc.projectId === draft.id : doc.orderId === draft.id))
+    : []
+  const importTarget = importFolder === '__keep__'
+    ? null
+    : (importFolder === '__new__' ? importNewFolder.trim().replace(/^\/+|\/+$/g, '') : importFolder)
+  const takeFiles = async (fileList) => {
+    const files = [...fileList]
+    if (!files.length || !onImportDocs) return
+    setImporting(true)
+    setImportError('')
+    try {
+      const created = await onImportDocs(files, importTarget)
+      if (Array.isArray(created) && created.length) setPendingDocs((current) => [...current, ...created])
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : '导入文档失败。')
+    } finally {
+      setImporting(false)
+    }
+  }
+  const docSection = type === 'plan' ? null : h('div', { key: 'docs', className: 'pmplan-doc-import' },
+    h('div', { className: 'pmplan-row' },
+      h('span', { className: 'pmplan-section-title' }, `文档 ${linkedDocs.length + pendingDocs.length}`),
+      h('span', { className: 'pmplan-spacer' }),
+      h('span', { className: 'pmplan-small pmplan-muted' }, '导入到'),
+      h(Select, {
+        value: importFolder,
+        onChange: setImportFolder,
+        options: [
+          { value: '__keep__', label: '保留所选目录结构' },
+          { value: '', label: '文档库根目录' },
+          ...folders.map((folder) => ({ value: folder.path, label: folder.path })),
+          { value: '__new__', label: '新建子目录…' }
+        ]
+      }),
+      importFolder === '__new__'
+        ? h('input', {
+            className: 'pmplan-input',
+            style: { maxWidth: '150px' },
+            value: importNewFolder,
+            placeholder: '例如 2026/需求',
+            'aria-label': '新建子目录',
+            onChange: (event) => setImportNewFolder(event.target.value)
+          })
+        : null,
+      h('label', { className: 'pmplan-btn', 'data-variant': 'primary' },
+        importing ? '导入中…' : '导入文件',
+        h('input', {
+          type: 'file',
+          multiple: true,
+          style: { display: 'none' },
+          'aria-label': '导入文档文件',
+          onChange: (event) => { takeFiles(event.target.files || []); event.target.value = '' }
+        })
+      ),
+      h('label', { className: 'pmplan-btn' },
+        '导入文件夹',
+        h('input', {
+          type: 'file',
+          webkitdirectory: '',
+          directory: '',
+          multiple: true,
+          style: { display: 'none' },
+          'aria-label': '导入文档文件夹',
+          onChange: (event) => { takeFiles(event.target.files || []); event.target.value = '' }
+        })
+      )
+    ),
+    importError ? h('div', { className: 'pmplan-small', style: { color: 'var(--pm-danger)' } }, importError) : null,
+    linkedDocs.length || pendingDocs.length
+      ? h('div', { className: 'pmplan-col' },
+          linkedDocs.map((doc) => h('div', { key: `linked-${doc.path}`, className: 'pmplan-small' }, `📄 ${doc.name}`)),
+          pendingDocs.map((doc) => h('div', { key: `pending-${doc.path}`, className: 'pmplan-small pmplan-muted' }, `📄 ${doc.name}（保存后挂靠）`))
+        )
+      : h('div', { className: 'pmplan-small pmplan-muted' },
+          draft.id
+            ? '还没有关联文档，可以直接导入。'
+            : '可以先导入，保存后自动挂到这个新建的条目上；取消则文档留在文档库、暂不挂靠。')
+  )
+
   return h(Modal, {
     title,
     onClose,
     footer: [
-      h(Button, { key: 'save', variant: 'primary', onClick: () => { if (valid) onSubmit(draft) }, disabled: !valid }, '保存'),
+      h(Button, { key: 'save', variant: 'primary', onClick: () => { if (valid) onSubmit({ ...draft, importedDocPaths: pendingDocs.map((doc) => doc.path) }) }, disabled: !valid }, '保存'),
       h(Button, { key: 'cancel', onClick: onClose }, '取消')
     ]
   },
-    type === 'project' ? projectFields : type === 'order' ? orderFields : planFields
+    [...(type === 'project' ? projectFields : type === 'order' ? orderFields : planFields), docSection]
   )
 }
 
@@ -1433,6 +1632,48 @@ function DocConfirmModal({ doc, onClose, onRemoveOnly, onDeleteFile }) {
     h('p', { className: 'pmplan-small pmplan-muted' }, `索引位置：${doc.path}`),
     h('p', { className: 'pmplan-small' }, '「只从索引移除」不会动你的文件，之后重新导入即可恢复登记。'),
     h('p', { className: 'pmplan-small pmplan-muted' }, '「同时删除本机文件」会真的删掉磁盘上的文件，无法从界面恢复。')
+  )
+}
+
+/** 新建 / 重命名目录：只收一个相对路径名，允许 `a/b` 这样的层级。 */
+function FolderNameModal({ folder, onClose, onSubmit }) {
+  const [name, setName] = useState(folder ? folder.path : '')
+  const clean = name.trim().replace(/^\/+|\/+$/g, '')
+  return h(Modal, {
+    title: folder ? `重命名目录 · ${folder.path}` : '新建目录',
+    onClose,
+    footer: [
+      h(Button, { key: 'save', variant: 'primary', disabled: !clean, onClick: () => onSubmit(clean) }, folder ? '重命名' : '新建'),
+      h(Button, { key: 'cancel', onClick: onClose }, '取消')
+    ]
+  },
+    h(TextField, {
+      label: folder ? '新的目录名' : '目录路径',
+      value: name,
+      onChange: setName,
+      placeholder: folder ? '例如 二期需求' : '例如 2026/需求文档'
+    }),
+    h('p', { className: 'pmplan-small pmplan-muted' },
+      folder
+        ? '改名会连同目录下所有文件一起移动，索引会自动跟着更新。'
+        : '目录建在文档库根目录下；用 / 分隔可以一次建出多级目录。')
+  )
+}
+
+/** 删除目录：默认只从索引移除（磁盘目录留着），也可以连同目录下的文件一起删。 */
+function FolderConfirmModal({ folder, onClose, onRemoveOnly, onDeleteFiles }) {
+  return h(Modal, {
+    title: '删除目录',
+    onClose,
+    footer: [
+      h(Button, { key: 'only', variant: 'primary', onClick: onRemoveOnly }, '只从索引移除'),
+      h(Button, { key: 'files', variant: 'danger', onClick: onDeleteFiles }, '连同文件一起删除'),
+      h(Button, { key: 'cancel', onClick: onClose }, '取消')
+    ]
+  },
+    h('p', null, folder.path),
+    h('p', { className: 'pmplan-small pmplan-muted' }, '「只从索引移除」只清掉索引里的登记信息（挂靠、标签、版本），磁盘上的目录和文件都还在，之后会被当作未登记文件重新发现。'),
+    h('p', { className: 'pmplan-small pmplan-muted' }, '「连同文件一起删除」会递归删掉这个目录及其下所有文件，无法从界面恢复。')
   )
 }
 

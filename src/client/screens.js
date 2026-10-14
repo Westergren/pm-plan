@@ -836,8 +836,10 @@ function shortTime(value) {
 export function DocsScreen(props) {
   const {
     docs, docsRoot, docsRootDraft, docsLoading, docsError, docsUploading,
-    projects, orders, onReloadDocs, onSetDocsRootDraft, onConfirmDocsRoot, onPickDocsRoot,
-    onUploadDocs, onOpenDoc, onEditDoc, onEditDocMeta, onDeleteDoc, onOpenProject, onNewDoc
+    projects, orders, folders,
+    onReloadDocs, onSetDocsRootDraft, onConfirmDocsRoot, onPickDocsRoot,
+    onUploadDocs, onOpenDoc, onEditDoc, onEditDocMeta, onDeleteDoc, onOpenProject, onNewDoc,
+    onOpenFolder, onNewFolder, onRenameFolder, onDeleteFolder
   } = props
   const [kindFilter, setKindFilter] = useState('')
   const [projectFilter, setProjectFilter] = useState('')
@@ -856,11 +858,15 @@ export function DocsScreen(props) {
     return true
   })
   const kinds = [...new Set(docs.map((doc) => doc.kind))]
-  // 文档库里已有的子目录（含各级父目录），供「导入到」下拉选择。
-  const folderChoices = [...new Set(docs.flatMap((doc) => {
-    const parts = String(doc.folder || '').split('/').filter(Boolean)
-    return parts.map((_, index) => parts.slice(0, index + 1).join('/'))
-  }))].sort()
+  // 文档库里真实存在的子目录（含空目录），供「导入到」与目录管理使用。
+  // folders 缺失时（旧调用方）退回从文件路径前缀推导。
+  const folderList = Array.isArray(folders) && folders.length
+    ? folders
+    : [...new Set(docs.flatMap((doc) => {
+        const parts = String(doc.folder || '').split('/').filter(Boolean)
+        return parts.map((_, index) => parts.slice(0, index + 1).join('/'))
+      }))].sort().map((path) => ({ path, name: path.slice(path.lastIndexOf('/') + 1) }))
+  const folderChoices = folderList.map((folder) => folder.path)
   // null = 保留所选目录结构；字符串 = 所有文件平铺进这个子目录。
   const importTarget = importFolder === '__keep__'
     ? null
@@ -962,6 +968,7 @@ export function DocsScreen(props) {
         })
       : null,
     h(Button, { onClick: onReloadDocs }, '刷新'),
+    h(Button, { onClick: onNewFolder, disabled: !(docsRoot && docsRoot.exists) }, '新建文件夹'),
     h(Button, { variant: 'primary', onClick: onNewDoc }, '新建 Markdown'),
     h('label', { className: 'pmplan-btn', 'data-variant': 'primary' },
       docsUploading ? '导入中…' : '导入文档',
@@ -976,6 +983,28 @@ export function DocsScreen(props) {
         }
       })
     )
+  )
+
+  const folderSection = h('div', { className: 'pmplan-card' },
+    h('div', { className: 'pmplan-card-head' },
+      h('span', { className: 'pmplan-card-title' }, `目录 ${folderList.length}`),
+      h('span', { className: 'pmplan-spacer' }),
+      h('span', { className: 'pmplan-small pmplan-muted' }, '点目录名用系统访达打开'),
+      h(Button, { size: 'small', onClick: onNewFolder, disabled: !(docsRoot && docsRoot.exists) }, '新建文件夹')
+    ),
+    folderList.length === 0
+      ? h('div', { className: 'pmplan-small pmplan-muted' }, '文档库里还没有子目录。可以点「新建文件夹」，或在上面「导入到」里选「新建子目录…」。')
+      : h('div', null, folderList.map((folder) => h('div', { className: 'pmplan-folder-row', key: folder.path },
+          h('button', {
+            type: 'button',
+            className: 'pmplan-folder-name',
+            title: '在系统访达里打开这个文件夹',
+            onClick: () => onOpenFolder(folder)
+          }, `📁 ${folder.path}`),
+          h('span', { className: 'pmplan-spacer' }),
+          h(Button, { size: 'small', onClick: () => onRenameFolder(folder) }, '重命名'),
+          h(Button, { size: 'small', onClick: () => onDeleteFolder(folder) }, '删除')
+        )))
   )
 
   const table = docs.length === 0
@@ -1036,7 +1065,7 @@ export function DocsScreen(props) {
     h('div', { key: 'root' }, rootBar),
     h('div', { key: 'toolbar' }, toolbar),
     docsError ? h(Banner, { key: 'err', tone: 'danger', children: docsError }) : null,
-    docsLoading ? h('div', { key: 'loading', className: 'pmplan-muted pmplan-small' }, '正在读取文档库…') : h('div', { key: 'table' }, table)
+    docsLoading ? h('div', { key: 'loading', className: 'pmplan-muted pmplan-small' }, '正在读取文档库…') : h('div', { key: 'table' }, folderSection, table)
   ]
 }
 

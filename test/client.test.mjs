@@ -170,6 +170,31 @@ test('文档页：列表按钮统一叫「打开」，「导入到」列出文�
   }
 })
 
+test('文档页：目录是一等条目，空目录也能在列表里管理和被导入选中', async () => {
+  const state = normalizeState(sampleState(today))
+  const { exported, React } = await boot({ state, revision: 3 })
+  const { renderToStaticMarkup } = await import('react-dom/server')
+  const noop = () => {}
+  const props = {
+    docs: [{ id: 'd1', path: '手机银行/需求说明书.md', name: '需求说明书.md', folder: '手机银行', kind: 'markdown', editable: true, size: 10, projectId: '', orderId: '', title: '', tags: [], note: '', version: '', addedAt: '', updatedAt: '', missing: false }],
+    // 空目录只可能来自服务端扫描，不能靠文件路径前缀推导出来
+    folders: [{ path: '手机银行', name: '手机银行' }, { path: '2026/待归档', name: '待归档' }],
+    docsRoot: { root: '/tmp/库', exists: true, indexFile: '/tmp/库/index.json' }, docsRootDraft: '/tmp/库',
+    docsLoading: false, docsError: '', docsUploading: false, projects: [], orders: [],
+    onReloadDocs: noop, onSetDocsRootDraft: noop, onConfirmDocsRoot: noop, onPickDocsRoot: noop,
+    onUploadDocs: noop, onOpenDoc: noop, onEditDoc: noop, onEditDocMeta: noop, onDeleteDoc: noop,
+    onOpenProject: noop, onNewDoc: noop,
+    onOpenFolder: noop, onNewFolder: noop, onRenameFolder: noop, onDeleteFolder: noop
+  }
+  const markup = renderToStaticMarkup(React.createElement(exported.screensApi.DocsScreen, props))
+  assert.ok(markup.includes('📁 2026/待归档'), '空目录没有出现在文档页')
+  assert.ok(markup.includes('目录 2'), '目录数量不对')
+  assert.ok(markup.includes('新建文件夹'), '缺少新建文件夹入口')
+  assert.ok(markup.includes('>重命名<'), '目录缺少重命名按钮')
+  assert.ok(markup.includes('>删除<'), '目录缺少删除按钮')
+  assert.ok(markup.includes('在系统访达里打开这个文件夹'), '目录名不是用系统访达打开的入口')
+})
+
 test('用户输入不会被原样当成 HTML 注入', async () => {
   const state = normalizeState({
     version: 1,
@@ -244,7 +269,7 @@ async function mountPanel(options = {}) {
       await new Promise((resolve) => dom.window.setTimeout(resolve, 0))
     })
   }
-  return { dom, document: dom.window.document, fake, flush, act: act_run, cleanup, React: loaded.React }
+  return { dom, document: dom.window.document, fake, flush, act: act_run, cleanup, React: loaded.React, hostWindow: loaded.hostWindow }
 }
 
 function click(element) {
@@ -703,6 +728,55 @@ test('jsdom 挂载：项目表单有项目编号与投产日期，没有截止�
       assert.ok(dialog.textContent.includes(label), `项目表单缺少「${label}」`)
     }
     assert.ok(!dialog.textContent.includes('截止日期'), '项目表单不该再叫「截止日期」')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
+test('jsdom 挂载：新建项目弹窗可导入文档，保存后自动挂靠到项目', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    // 有本机路径时走服务端「移动」，不需要读 base64。
+    // 注意：打包代码闭包里的 window 是加载器注入的 hostWindow，不是 jsdom 的 window。
+    assert.ok(panel.hostWindow, '加载器没有暴露 hostWindow')
+    panel.hostWindow.__DSH_HOST_PATHS__ = { pathFor: () => '/tmp/外部/需求说明书.md' }
+
+    const newButton = [...panel.document.querySelectorAll('button')].find((node) => node.textContent === '新建项目')
+    await panel.act(() => click(newButton))
+    const dialog = panel.document.querySelector('[role="dialog"]')
+    assert.ok(dialog, '没有打开项目弹窗')
+    for (const label of ['导入文件', '导入文件夹', '保留所选目录结构']) {
+      assert.ok(dialog.textContent.includes(label), `项目弹窗缺少「${label}」`)
+    }
+    assert.ok(dialog.textContent.includes('保存后自动挂到这个新建的条目上'), '新建项目没有说明挂靠时机')
+
+    const file = new panel.dom.window.File(['# 需求'], '需求说明书.md', { type: 'text/markdown' })
+    const fileInput = dialog.querySelector('input[aria-label="导入文档文件"]')
+    assert.ok(fileInput, '没有「导入文件」的文件选择器')
+    // jsdom 的 files 是只读 getter，必须自己挂一个可写的自有属性
+    Object.defineProperty(fileInput, 'files', { value: [file], configurable: true })
+    await panel.act(() => fileInput.dispatchEvent(new panel.dom.window.Event('change', { bubbles: true })))
+    await panel.flush(30)
+
+    assert.equal(panel.fake.uploads.length, 1, '没有发起导入请求')
+    assert.equal(panel.fake.uploads[0].sourcePath, '/tmp/外部/需求说明书.md', '导入应当带上本机路径走移动')
+    assert.ok(dialog.textContent.includes('需求说明书.md（保存后挂靠）'), '弹窗没有列出待挂靠的文档')
+
+    const nameInput = dialog.querySelector('input[placeholder="例如：手机银行 6.2 版本迭代"]')
+    assert.ok(nameInput, '没有项目名称输入框')
+    await panel.act(() => typeInto(panel, nameInput, '新项目'))
+    const saveButton = [...dialog.querySelectorAll('button')].find((node) => node.textContent === '保存')
+    await panel.act(() => click(saveButton))
+    await panel.flush(700)
+
+    const saved = panel.fake.memory.state.projects.find((project) => project.name === '新项目')
+    assert.ok(saved, '项目没有落盘')
+    assert.equal(saved.importedDocPaths, undefined, 'importedDocPaths 是弹窗的临时字段，不能写进项目对象')
+    const meta = panel.fake.metas.find((item) => item.projectId === saved.id)
+    assert.ok(meta, '保存后没有把导入的文档挂到项目上')
+    assert.equal(meta.path, '需求说明书.md')
+    assert.equal(meta.orderId, undefined, '项目导入不该顺手写 orderId')
   } finally {
     await panel.cleanup()
   }

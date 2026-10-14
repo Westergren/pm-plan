@@ -286,3 +286,84 @@ test('relativeToRoot 给出可读位置', () => {
   assert.equal(relativeToRoot('/a/b', '/a/b'), '.')
   assert.equal(relativeToRoot('/a/b', '/x/y.md'), '/x/y.md')
 })
+
+test('store：空目录也是一等条目，会出现在 folders 里', async () => {
+  const base = await temporary()
+  try {
+    const store = createDocsStore({ root: join(base, '库') })
+    await store.ensureRoot()
+
+    // 空的目录也要能被列出来，否则界面上没法管理它。
+    const empty = await store.createFolder('二期')
+    assert.equal(empty.created, true)
+    await store.createFolder('二期/需求')
+    assert.equal((await store.createFolder('二期')).created, false, '重复新建应当是幂等的')
+
+    const listed = await store.list()
+    assert.deepEqual(listed.folders.map((folder) => folder.path), ['二期', '二期/需求'])
+    assert.deepEqual(listed.folders.map((folder) => folder.name), ['二期', '需求'])
+    assert.equal(listed.count, 0, '只有目录时不算文档')
+
+    // 同名文件占位时不能当目录用
+    await writeFile(join(base, '库', '占位.md'), 'x', 'utf8')
+    await assert.rejects(() => store.createFolder('占位.md'), /同名文件/)
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
+
+test('store：重命名目录会把索引里整棵子树的 path 一起改写', async () => {
+  const base = await temporary()
+  try {
+    const store = createDocsStore({ root: join(base, '库') })
+    await store.ensureRoot()
+    await store.upload({ name: 'a.md', folder: '手机银行/二期', base64: Buffer.from('a').toString('base64') })
+    await store.upload({ name: 'b.md', folder: '手机银行/二期', base64: Buffer.from('b').toString('base64') })
+    await store.upload({ name: 'c.md', folder: '手机银行', base64: Buffer.from('c').toString('base64') })
+
+    const renamed = await store.renameFolder('手机银行/二期', '三期')
+    assert.equal(renamed.path, '手机银行/三期')
+    assert.equal(renamed.moved, 2)
+
+    const listed = await store.list()
+    const paths = listed.documents.map((doc) => doc.path).sort()
+    assert.deepEqual(paths, ['手机银行/c.md', '手机银行/三期/a.md', '手机银行/三期/b.md'])
+    assert.equal(listed.missing, 0, '改名后不能有任何文件掉成「找不到」')
+    assert.equal(await readFile(join(base, '库', '手机银行', '三期', 'a.md'), 'utf8'), 'a')
+
+    // 重名目录要挡住
+    await store.createFolder('手机银行/四期')
+    await assert.rejects(() => store.renameFolder('手机银行/三期', '四期'), /同名目录/)
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
+
+test('store：删除目录默认只清索引，确认后才递归删盘', async () => {
+  const base = await temporary()
+  try {
+    const store = createDocsStore({ root: join(base, '库') })
+    await store.ensureRoot()
+    await store.upload({ name: 'a.md', folder: '旧目录', base64: Buffer.from('a').toString('base64') })
+
+    const only = await store.deleteFolder('旧目录')
+    assert.equal(only.filesDeleted, false)
+    assert.equal(only.removed, 1)
+    // 磁盘没动：目录和文件都还在，只是索引里的登记信息没了，会被当作未登记文件重新发现
+    assert.equal(await readFile(join(base, '库', '旧目录', 'a.md'), 'utf8'), 'a')
+    const afterIndexOnly = await store.list()
+    assert.equal(afterIndexOnly.documents.length, 1)
+    assert.equal(afterIndexOnly.documents[0].id, 'auto:旧目录/a.md')
+    assert.equal(afterIndexOnly.folders.length, 1)
+
+    const hard = await store.deleteFolder('旧目录', { deleteFiles: true })
+    assert.equal(hard.filesDeleted, true)
+    await assert.rejects(() => stat(join(base, '库', '旧目录')), (error) => error.code === 'ENOENT')
+    assert.deepEqual((await store.list()).folders, [])
+
+    // 根目录本身不能被当成目录条目删掉
+    await assert.rejects(() => store.deleteFolder(''), /需要提供目录路径/)
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})

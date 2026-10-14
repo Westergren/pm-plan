@@ -107,4 +107,17 @@ export async function docAction(path, action, extra = {}) {
   return parse(response)
 }
 
+/** 目录是一等条目：新建 / 重命名 / 删除都走同一个 action 通道。 */
+export async function createFolder(path) {
+  return docAction(path, 'createFolder')
+}
+
+export async function renameFolder(path, name) {
+  return docAction(path, 'renameFolder', { name })
+}
+
+export async function deleteFolder(path, deleteFiles = false) {
+  return docAction(path, 'deleteFolder', { deleteFiles: Boolean(deleteFiles) })
+}
+
 export { PREFIX }

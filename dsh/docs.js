@@ -211,6 +211,32 @@ async function walkFiles(root, limit = 5000) {
   return found
 }
 
+/** 文档库里的全部子目录（含没有文件的空目录），跳过隐藏目录与 SKIP_DIRS。 */
+async function walkDirs(root, limit = 2000) {
+  const found = []
+  const queue = ['']
+  while (queue.length && found.length < limit) {
+    const relativeDir = queue.shift()
+    const absoluteDir = relativeDir ? join(root, ...relativeDir.split('/')) : root
+    let entries
+    try {
+      entries = await readdir(absoluteDir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      if (entry.name.startsWith('.')) continue
+      if (SKIP_DIRS.has(entry.name)) continue
+      const child = relativeDir ? `${relativeDir}/${entry.name}` : entry.name
+      found.push(child)
+      queue.push(child)
+      if (found.length >= limit) break
+    }
+  }
+  return found.sort((left, right) => left.localeCompare(right, 'zh-Hans-CN'))
+}
+
 /**
  * 创建文档库存储。`root` 由插件配置提供（默认 `~/Documents/项目计划工作台文档`），
  * 但**只有用户在界面确认后**才会被 mkdir（`ensureRoot`）。
@@ -320,7 +346,18 @@ export function createDocsStore({ root }) {
       documents.push({ ...doc, name, folder: folderOf(doc.path), kind, editable: isEditableKind(kind), size: 0, missing: true })
     }
     documents.sort((left, right) => left.path.localeCompare(right.path, 'zh-Hans-CN'))
-    return { root: currentRoot, documents, count: documents.length, missing: documents.filter((doc) => doc.missing).length }
+    // 目录是一等条目：没有文件的空目录也要列出来，界面才能管理它们。
+    const folders = (await walkDirs(currentRoot)).map((path) => ({
+      path,
+      name: path.slice(path.lastIndexOf('/') + 1)
+    }))
+    return {
+      root: currentRoot,
+      documents,
+      folders,
+      count: documents.length,
+      missing: documents.filter((doc) => doc.missing).length
+    }
   }
 
   const readText = async (relative) => {
@@ -510,5 +547,84 @@ export function createDocsStore({ root }) {
     return { path: target }
   }
 
-  return { info, ensureRoot, list, readText, saveText, upload, updateMeta, remove, renameDoc, absoluteOf, getRoot: () => currentRoot }
+  /** 目录动作只接受库内相对路径，且不允许指向根目录本身。 */
+  const folderTarget = (relative) => {
+    const clean = normalizeRelative(relative)
+    if (!clean) throw new DocsError('需要提供目录路径。')
+    return clean
+  }
+
+  const statOrNull = async (absolute) => {
+    try {
+      return await stat(absolute)
+    } catch {
+      return null
+    }
+  }
+
+  const createFolder = async (relative) => {
+    const clean = folderTarget(relative)
+    const absolute = absoluteOf(clean)
+    const existing = await statOrNull(absolute)
+    if (existing && !existing.isDirectory()) throw new DocsError('同名文件已经存在。', 409)
+    if (existing) return { path: clean, created: false }
+    try {
+      await mkdir(absolute, { recursive: true })
+    } catch (error) {
+      throw new DocsError(`新建目录失败：${error instanceof Error ? error.message : String(error)}`, 500)
+    }
+    return { path: clean, created: true }
+  }
+
+  const renameFolder = async (relative, nextName) => {
+    const clean = folderTarget(relative)
+    const name = safeName(nextName)
+    if (!name) throw new DocsError('需要提供新的目录名。')
+    const target = normalizeRelative([folderOf(clean), name].filter(Boolean).join('/'))
+    if (!target) throw new DocsError('目录名不合法。')
+    if (target.toLowerCase() === clean.toLowerCase()) return { path: clean, moved: 0 }
+    const to = absoluteOf(target)
+    if (await statOrNull(to)) throw new DocsError('同名目录已经存在。', 409)
+    try {
+      await rename(absoluteOf(clean), to)
+    } catch (error) {
+      throw new DocsError(`重命名目录失败：${error instanceof Error ? error.message : String(error)}`, 500)
+    }
+    // 索引里记的是每个文件的相对路径：目录一改名，整棵子树的 path 都要跟着改，
+    // 否则它们会在下次 list() 时全部变成「找不到」。
+    const index = await readIndex()
+    const prefix = `${clean}/`
+    const stamp = new Date().toISOString()
+    let moved = 0
+    for (const doc of index.documents) {
+      if (!doc.path.toLowerCase().startsWith(prefix.toLowerCase())) continue
+      doc.path = `${target}/${doc.path.slice(prefix.length)}`
+      doc.updatedAt = stamp
+      moved += 1
+    }
+    await writeIndex(index)
+    return { path: target, moved }
+  }
+
+  const deleteFolder = async (relative, { deleteFiles = false } = {}) => {
+    const clean = folderTarget(relative)
+    const prefix = `${clean}/`
+    const index = await readIndex()
+    const inside = index.documents.filter((doc) => doc.path.toLowerCase().startsWith(prefix.toLowerCase()))
+    index.documents = index.documents.filter((doc) => !doc.path.toLowerCase().startsWith(prefix.toLowerCase()))
+    await writeIndex(index)
+    if (!deleteFiles) return { path: clean, removed: inside.length, filesDeleted: false }
+    try {
+      await rm(absoluteOf(clean), { recursive: true, force: true })
+    } catch (error) {
+      throw new DocsError(`删除目录失败：${error instanceof Error ? error.message : String(error)}`, 500)
+    }
+    return { path: clean, removed: inside.length, filesDeleted: true }
+  }
+
+  return {
+    info, ensureRoot, list, readText, saveText, upload, updateMeta, remove, renameDoc,
+    createFolder, renameFolder, deleteFolder,
+    absoluteOf, getRoot: () => currentRoot
+  }
 }
