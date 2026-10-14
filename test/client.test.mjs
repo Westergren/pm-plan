@@ -90,7 +90,6 @@ test('各业务页签在有数据时都能渲染出内容', async () => {
     onEditProject: noop,
     onEditOrder: noop,
     onEditPlan: noop,
-    onTogglePlan: noop,
     onToggleOrderStage: noop,
     onDelete: noop,
     onSetView: noop,
@@ -237,6 +236,13 @@ function typeInto(panel, element, value) {
   element.dispatchEvent(new panel.dom.window.Event('input', { bubbles: true }))
 }
 
+// 原生 select 的 value tracker 同理：必须走原型 setter + change 事件，否则 React 收不到变更。
+function selectInto(panel, element, value) {
+  const setter = Object.getOwnPropertyDescriptor(panel.dom.window.HTMLSelectElement.prototype, 'value').set
+  setter.call(element, value)
+  element.dispatchEvent(new panel.dom.window.Event('change', { bubbles: true }))
+}
+
 test('jsdom 挂载：读取本机数据并渲染真实项目', async () => {
   const panel = await mountPanel()
   try {
@@ -251,22 +257,35 @@ test('jsdom 挂载：读取本机数据并渲染真实项目', async () => {
   }
 })
 
-test('jsdom 挂载：勾选计划完成会写回本机数据', async () => {
+test('jsdom 挂载：计划列表没有「完成」勾选列，改状态要走编辑表单并落盘', async () => {
   const panel = await mountPanel()
   try {
     await panel.flush()
     const planTab = [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === '计划')
     assert.ok(planTab, '没有找到计划页签')
     await panel.act(() => click(planTab))
-    const checkboxes = [...panel.document.querySelectorAll('input[type="checkbox"]')]
-    assert.ok(checkboxes.length > 0, '没有找到计划勾选框')
-    await panel.act(() => click(checkboxes[0]))
+    assert.equal(
+      panel.document.querySelectorAll('.pmplan-table tbody input[type="checkbox"]').length,
+      0,
+      '计划列表不该再有「完成」勾选框'
+    )
+
+    // 状态改由编辑表单负责，保存后要落盘
+    const row = panel.document.querySelector('.pmplan-table tbody tr')
+    await panel.act(() => click(row.querySelector('.pmplan-cell-actions button')))
+    const dialog = panel.document.querySelector('[role="dialog"]')
+    assert.ok(dialog, '没有打开计划编辑弹窗')
+    const statusField = [...dialog.querySelectorAll('.pmplan-field')]
+      .find((node) => node.querySelector('label')?.textContent === '状态')
+    assert.ok(statusField, '计划表单里没有状态字段')
+    await panel.act(() => selectInto(panel, statusField.querySelector('select'), '已完成'))
+    const save = [...dialog.querySelectorAll('button')].find((node) => node.textContent === '保存')
+    await panel.act(() => click(save))
     await panel.flush(700)
+
     const posts = panel.fake.calls.filter((call) => call.method === 'POST')
-    assert.ok(posts.length >= 1, '勾选后没有保存')
-    const written = panel.fake.memory.state
-    assert.ok(written.plans.some((plan) => plan.status === '已完成'), '写回的数据里没有已完成的计划')
-    assert.equal(panel.fake.memory.revision, 2)
+    assert.ok(posts.length >= 1, '保存后没有写回')
+    assert.ok(panel.fake.memory.state.plans.some((plan) => plan.status === '已完成'), '写回的数据里没有已完成的计划')
   } finally {
     await panel.cleanup()
   }
@@ -625,9 +644,12 @@ test('jsdom 挂载：计划页显示模块与投产日期，没有进度列', as
     const tab = (label) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === label)
     await panel.act(() => click(tab('计划')))
     const headers = [...panel.document.querySelectorAll('thead th')].map((node) => node.textContent)
-    assert.deepEqual(headers, ['完成', '计划', '模块', '状态', '负责人', '完成日期', '风险', '操作'])
+    assert.deepEqual(headers, ['计划', '模块', '状态', '负责人', '开始日期', '完成日期', '风险', '操作'])
     assert.ok(!panel.document.body.textContent.includes('进度'), '计划页不该再有进度')
     assert.ok(panel.document.body.textContent.includes('移动端开发'), '计划列表没有显示模块名')
+    // 开始日期要有真实取值（示例计划都有开始日期）
+    const firstRowCells = [...panel.document.querySelectorAll('.pmplan-table tbody tr')[0].querySelectorAll('td')]
+    assert.match(firstRowCells[4].textContent.trim(), /^\d{4}-\d{2}-\d{2}$/, '开始日期列没有显示日期')
     // 操作列的编辑/删除原本挨在一起：确认两个按钮是相邻兄弟且都带 .pmplan-btn，
     // 否则补间距的 `+` 选择器不会命中。
     const actionButtons = [...panel.document.querySelectorAll('.pmplan-table tbody tr td.pmplan-cell-actions button')].slice(0, 2)

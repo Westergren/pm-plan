@@ -554,7 +554,7 @@ export function OrdersScreen(props) {
 /* ---------------- 计划 ---------------- */
 
 export function PlansScreen(props) {
-  const { scoped, today, onOpenPlan, onEditPlan, onDelete, onTogglePlan } = props
+  const { scoped, today, onOpenPlan, onEditPlan, onDelete } = props
   const [mode, setMode] = useState('table')
   const [sortMode, setSortMode] = useState('risk')
   const rows = sortPlans(scoped.plans, today, sortMode)
@@ -571,7 +571,7 @@ export function PlansScreen(props) {
         onChange: setSortMode,
         options: [
           { value: 'risk', label: '按风险' },
-          { value: 'due', label: '按截止' },
+          { value: 'due', label: '按完成日期' },
           { value: 'status', label: '按状态' }
         ]
       }),
@@ -587,28 +587,23 @@ export function PlansScreen(props) {
         ? h('div', { className: 'pmplan-table-wrap', key: 'table' },
             h('table', { className: 'pmplan-table' },
               h('thead', null, h('tr', null,
-                h('th', null, '完成'),
                 h('th', null, '计划'),
                 h('th', null, '模块'),
                 h('th', null, '状态'),
                 h('th', null, '负责人'),
+                h('th', null, '开始日期'),
                 h('th', null, '完成日期'),
                 h('th', null, '风险'),
                 h('th', { className: 'pmplan-cell-actions' }, '操作')
               )),
               h('tbody', null, rows.map((plan) => h('tr', { key: plan.id },
-                h('td', null, h('input', {
-                  type: 'checkbox',
-                  checked: plan.status === '已完成',
-                  'aria-label': `完成 ${plan.title}`,
-                  onChange: () => onTogglePlan(plan)
-                })),
                 h('td', { className: 'pmplan-title-cell' },
                   h('button', { type: 'button', className: 'pmplan-btn', 'data-variant': 'ghost', style: { padding: 0 }, onClick: () => onOpenPlan(plan.id) }, plan.title)
                 ),
                 h('td', { className: 'pmplan-muted' }, plan.moduleName),
                 h('td', null, h(Badge, { tone: plan.status === '已完成' ? 'ok' : plan.status === '进行中' ? 'info' : 'muted', children: plan.status })),
                 h('td', { className: 'pmplan-muted' }, plan.owner || '未指派'),
+                h('td', { className: 'pmplan-nums' }, formatDate(plan.startedOn, '未排期')),
                 h('td', { className: 'pmplan-nums' }, formatDate(plan.dueDate, '未排期')),
                 h('td', null, h(Badge, { tone: toneOf(plan.risk), children: plan.risk })),
                 h('td', { className: 'pmplan-cell-actions' },

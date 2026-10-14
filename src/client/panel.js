@@ -404,18 +404,6 @@ export function PlanWorkbench({ service, entry, conversation }) {
     }), `工单状态：${stage}`)
   }, [mutate])
 
-  const togglePlanDone = useCallback((plan) => {
-    const done = plan.status === '已完成'
-    mutate((state) => ({
-      ...state,
-      plans: replaceById(state.plans, {
-        ...plan,
-        status: done ? '进行中' : '已完成',
-        updatedAt: new Date().toISOString()
-      })
-    }), done ? '计划已恢复' : '计划已完成')
-  }, [mutate])
-
   const addLog = useCallback((refType, refId) => {
     if (!logDraft.text.trim()) return
     const text = logDraft.text.trim()
@@ -630,7 +618,6 @@ export function PlanWorkbench({ service, entry, conversation }) {
     onEditProject: (project) => setEditor({ type: 'project', form: project || EMPTY_PROJECT(config) }),
     onEditOrder: (order) => setEditor({ type: 'order', form: order || EMPTY_ORDER(config) }),
     onEditPlan: (plan) => setEditor({ type: 'plan', form: plan || EMPTY_PLAN(moduleNames[0]) }),
-    onTogglePlan: togglePlanDone,
     onToggleOrderStage: setOrderStage,
     onDelete: (type, id) => setConfirm({ type, id }),
     onSetView: setView,
