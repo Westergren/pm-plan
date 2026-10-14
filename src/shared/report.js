@@ -19,9 +19,9 @@ import { addDays, endOfWeek, formatDate, monthKey, quarterKey, startOfWeek, toda
 
 const KIND_LABEL = { project: '项目', order: '工单', plan: '计划' }
 
-/** 同名字段在不同对象上叫法不同：项目与工单的 dueDate 是「投产日期」，计划的仍是「截止日期」。 */
+/** 同名字段在不同对象上叫法不同：项目与工单的 dueDate 是「投产日期」，计划的是「完成日期」。 */
 function dueLabel(kind) {
-  return kind === 'plan' ? '截止' : '投产'
+  return kind === 'plan' ? '完成' : '投产'
 }
 
 function line(...parts) {

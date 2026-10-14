@@ -205,7 +205,7 @@ export function OverviewScreen(props) {
       h(Kpi, { key: 'c', label: '未结束工单', value: stats.orderOpen, hint: `逾期 ${stats.orderOverdue}` }),
       h(Kpi, { key: 'd', label: '未完成计划', value: stats.planOpen, hint: `本周到期 ${stats.planWeek}` }),
       h(Kpi, { key: 'e', label: '平均进度', value: `${stats.avgProgress}%` }),
-      h(Kpi, { key: 'f', label: '未排期', value: stats.unscheduled, hint: '缺开始或投产' })
+      h(Kpi, { key: 'f', label: '未排期', value: stats.unscheduled, hint: '缺开始或投产/完成' })
     ),
     h('div', { className: 'pmplan-headline', key: 'headline' }, summaryLine),
     h('div', { className: 'pmplan-grid', key: 'charts' },
@@ -592,7 +592,7 @@ export function PlansScreen(props) {
                 h('th', null, '模块'),
                 h('th', null, '状态'),
                 h('th', null, '负责人'),
-                h('th', null, '投产日期'),
+                h('th', null, '完成日期'),
                 h('th', null, '风险'),
                 h('th', { className: 'pmplan-cell-actions' }, '操作')
               )),

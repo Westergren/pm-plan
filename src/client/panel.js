@@ -1056,7 +1056,7 @@ function DetailDrawer({ type, item, projects, orders, plans, logs, docs, today, 
     h(KeyValues, {
       rows: [
         ['负责人', item.owner || '未指派'],
-        ['起止', `${formatDate(item.startedOn, '未填')} ~ ${formatDate(item.dueDate, '未填')}`],
+        ['开始 / 完成', `${formatDate(item.startedOn, '未填')} ~ ${formatDate(item.dueDate, '未填')}`],
         ['更新于', formatDateTime(item.updatedAt, '—')]
       ]
     }),
@@ -1164,7 +1164,7 @@ function EditorModal({ type, form, projects, orders, moduleNames, platformNames,
     h(FieldRow, { key: 'row2' },
       h(TextField, { label: '负责人', value: draft.owner, onChange: (value) => set({ owner: value }) }),
       h(TextField, { label: '开始日期', type: 'date', value: draft.startedOn, onChange: (value) => set({ startedOn: value }) }),
-      h(TextField, { label: '投产日期', type: 'date', value: draft.dueDate, onChange: (value) => set({ dueDate: value }) })
+      h(TextField, { label: '完成日期', type: 'date', value: draft.dueDate, onChange: (value) => set({ dueDate: value }) })
     ),
     h(TextArea, { key: 'note', label: '备注', value: draft.note, onChange: (value) => set({ note: value }), placeholder: '产出物、依赖、风险' })
   ]

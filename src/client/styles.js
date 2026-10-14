@@ -475,6 +475,8 @@ export const styles = `
 
 .pmplan-table tbody tr:hover { background: var(--pm-bg-soft); }
 .pmplan-table td.pmplan-cell-actions { text-align: right; white-space: nowrap; }
+/* td 不是 flex 容器，相邻按钮挨在一起，这里补一点间距 */
+.pmplan-table td.pmplan-cell-actions .pmplan-btn + .pmplan-btn { margin-left: 6px; }
 .pmplan-title-cell { font-weight: 600; }
 .pmplan-clickable { cursor: pointer; }
 

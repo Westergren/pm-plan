@@ -625,9 +625,15 @@ test('jsdom 挂载：计划页显示模块与投产日期，没有进度列', as
     const tab = (label) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === label)
     await panel.act(() => click(tab('计划')))
     const headers = [...panel.document.querySelectorAll('thead th')].map((node) => node.textContent)
-    assert.deepEqual(headers, ['完成', '计划', '模块', '状态', '负责人', '投产日期', '风险', '操作'])
+    assert.deepEqual(headers, ['完成', '计划', '模块', '状态', '负责人', '完成日期', '风险', '操作'])
     assert.ok(!panel.document.body.textContent.includes('进度'), '计划页不该再有进度')
     assert.ok(panel.document.body.textContent.includes('移动端开发'), '计划列表没有显示模块名')
+    // 操作列的编辑/删除原本挨在一起：确认两个按钮是相邻兄弟且都带 .pmplan-btn，
+    // 否则补间距的 `+` 选择器不会命中。
+    const actionButtons = [...panel.document.querySelectorAll('.pmplan-table tbody tr td.pmplan-cell-actions button')].slice(0, 2)
+    assert.equal(actionButtons.length, 2, '操作列应有编辑与删除两个按钮')
+    assert.equal(actionButtons[0].nextElementSibling, actionButtons[1], '编辑与删除必须是相邻兄弟节点')
+    assert.ok(actionButtons.every((node) => node.classList.contains('pmplan-btn')))
 
     // 切到看板：卡片标题必须允许换行（不用 nowrap 的 .pmplan-btn），副标题显示模块名
     const boardToggle = [...panel.document.querySelectorAll('button')].find((node) => node.textContent === '看板')
@@ -641,7 +647,7 @@ test('jsdom 挂载：计划页显示模块与投产日期，没有进度列', as
   }
 })
 
-test('jsdom 挂载：计划表单挂模块、去掉所属项目与关联工单，截止改投产日期且没有进度', async () => {
+test('jsdom 挂载：计划表单挂模块、去掉所属项目与关联工单，截止改完成日期且没有进度', async () => {
   const panel = await mountPanel()
   try {
     await panel.flush()
@@ -649,9 +655,10 @@ test('jsdom 挂载：计划表单挂模块、去掉所属项目与关联工单�
     await panel.act(() => click(button))
     const dialog = panel.document.querySelector('[role="dialog"]')
     assert.ok(dialog, '没有打开计划弹窗')
-    for (const label of ['模块', '投产日期']) {
+    for (const label of ['模块', '完成日期']) {
       assert.ok(dialog.textContent.includes(label), `计划表单缺少「${label}」`)
     }
+    assert.ok(!dialog.textContent.includes('投产'), '计划表单不该再叫「投产日期」')
     for (const label of ['所属项目', '关联工单', '进度', '截止日期']) {
       assert.ok(!dialog.textContent.includes(label), `计划表单不该再有「${label}」`)
     }
@@ -675,6 +682,8 @@ test('jsdom 挂载：计划详情显示模块，没有进度', async () => {
     assert.ok(drawer, '没有打开计划抽屉')
     assert.ok(drawer.textContent.includes('模块：'), '计划详情没有显示模块')
     assert.ok(!drawer.textContent.includes('进度'), '计划详情不该再显示进度')
+    assert.ok(drawer.textContent.includes('开始 / 完成'), '计划详情应把日期叫「开始 / 完成」')
+    assert.ok(!drawer.textContent.includes('投产'), '计划详情不该再叫「投产」')
   } finally {
     await panel.cleanup()
   }
@@ -752,6 +761,11 @@ test('看板样式：阶段列按行平铺，不再横向滚动；卡片标题�
   assert.ok(!board.includes('grid-auto-flow: column'), '阶段列仍是横向排布')
   assert.ok(!board.includes('overflow-x'), '阶段列仍靠横向滚动')
   assert.ok(board.includes('repeat(auto-fill'), '阶段列没有改成可换行的平铺网格')
+  // 表格操作列的两个按钮原本挨在一起，靠相邻兄弟外边距补间距
+  assert.ok(
+    css.includes('.pmplan-table td.pmplan-cell-actions .pmplan-btn + .pmplan-btn { margin-left: 6px; }'),
+    '操作列的编辑/删除按钮之间没有间距'
+  )
   const block = css.slice(css.indexOf('.pmplan-btn-block'), css.indexOf('.pmplan-btn-block:hover'))
   assert.ok(block.includes('white-space: normal'), '卡片标题按钮仍然禁止换行')
 })
