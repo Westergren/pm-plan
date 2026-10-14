@@ -282,6 +282,16 @@ function click(element) {
  * 直接赋值会让 tracker 认为「值没变」，onChange 永远不会触发（假绿）。
  * 必须走原生 setter 绕过 tracker，再派发 input 事件。
  */
+/** 在 jsdom 里派发右键事件：React 的 onContextMenu 挂在原生 contextmenu 上。 */
+function rightClick(panel, element) {
+  element.dispatchEvent(new panel.dom.window.MouseEvent('contextmenu', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 120,
+    clientY: 80
+  }))
+}
+
 function typeInto(panel, element, value) {
   // textarea 与 input 是两个不同的原型：用错原型拿到的 setter 依然能赋值，
   // 但绕不开对应元素上的 value tracker，事件会被 React 判成「值没变」而不触发 onChange。
@@ -1025,15 +1035,35 @@ test('jsdom 挂载：新建笔记留下空条目，正文每次击键都落盘�
     assert.equal(panel.fake.memory.state.notes.length, 1)
     assert.equal(panel.fake.memory.state.notes[0].text, '今天要和陈方园确认排期')
 
-    // 删除要过确认弹窗，取消则保留
-    const del = [...panel.document.querySelectorAll('button')].find((node) => node.textContent === '删除')
-    await panel.act(() => click(del))
+    // 删除只走右键菜单：底栏不该再摆一个常驻的「删除」按钮
+    const foot = panel.document.querySelector('.pmplan-notes-foot')
+    assert.ok(![...foot.querySelectorAll('button')].some((node) => node.textContent === '删除'), '底栏还留着删除按钮')
+    assert.ok(foot.textContent.includes('右键左边的笔记可删除'), '删掉按钮后没有留下右键提示')
+
+    const menu = () => panel.document.querySelector('[role="menu"]')
+    const menuDelete = () => [...menu().querySelectorAll('[role="menuitem"]')].find((node) => node.textContent === '删除')
+    assert.equal(menu(), null, '菜单不该默认开着')
+
+    // 点别处会关掉菜单，且不误删
+    await panel.act(() => rightClick(panel, items()[0]))
+    assert.ok(menu(), '右键没有弹出菜单')
+    assert.equal(menu().style.left, '120px')
+    assert.equal(menu().style.top, '80px')
+    await panel.act(() => panel.document.body.dispatchEvent(new panel.dom.window.Event('pointerdown', { bubbles: true })))
+    assert.equal(menu(), null, '点别处没有关掉菜单')
+    assert.equal(items().length, 1, '关菜单不该删掉笔记')
+
+    // 菜单里的删除仍要过确认弹窗，取消则保留
+    await panel.act(() => rightClick(panel, items()[0]))
+    await panel.act(() => click(menuDelete()))
+    assert.equal(menu(), null, '点删除后菜单应该收起')
     const confirmDialog = [...panel.document.querySelectorAll('[role="dialog"]')].pop()
     assert.ok(confirmDialog.textContent.includes('删除这条笔记'), '确认文案不对')
     await panel.act(() => click([...confirmDialog.querySelectorAll('button')].find((node) => node.textContent === '取消')))
     assert.equal(items().length, 1, '取消后笔记不该被删')
 
-    await panel.act(() => click([...panel.document.querySelectorAll('button')].find((node) => node.textContent === '删除')))
+    await panel.act(() => rightClick(panel, items()[0]))
+    await panel.act(() => click(menuDelete()))
     const again = [...panel.document.querySelectorAll('[role="dialog"]')].pop()
     await panel.act(() => click([...again.querySelectorAll('button')].find((node) => node.textContent === '确认执行')))
     await panel.flush(700)
@@ -1043,6 +1073,19 @@ test('jsdom 挂载：新建笔记留下空条目，正文每次击键都落盘�
   } finally {
     await panel.cleanup()
   }
+})
+
+test('笔记样式：正文框撑到页面底部，删除只在右键菜单里', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const css = await readFile(new URL('../src/client/styles.js', import.meta.url), 'utf8')
+  const notes = css.slice(css.indexOf('.pmplan-notes {'), css.indexOf('.pmplan-note-item {'))
+  assert.ok(notes.includes('align-items: stretch'), '两栏没有纵向撑开')
+  assert.ok(notes.includes('flex: 1 1 auto'), '笔记整块没有撑满内容区')
+  const body = css.slice(css.indexOf('.pmplan-note-body {'), css.indexOf('.pmplan-notes-blank {'))
+  assert.ok(body.includes('flex: 1 1 auto'), '正文框没有吃掉右栏剩余高度')
+  assert.ok(body.includes('min-height: 320px'), '正文框失去了最小高度')
+  assert.ok(css.includes('.pmplan-note-menu {'), '没有右键菜单样式')
+  assert.ok(css.includes('.pmplan-note-menu-item {'), '没有右键菜单项样式')
 })
 
 test('jsdom 挂载：「清空所有数据」保留笔记，清掉项目', async () => {

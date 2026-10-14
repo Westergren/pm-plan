@@ -1,10 +1,10 @@
 /**
- * 八个业务页签的视图组件。
+ * 九个业务页签的视图组件。
  *
  * 全部是纯展示：数据与回调都来自面板，组件自己不读写本机数据。
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Badge, Button, Card, Empty, Kpi, Progress, Select, TextArea, cx } from './ui.js'
 import { BarList, Donut, StackedBars } from './charts.js'
 import {
@@ -1095,6 +1095,8 @@ function noteTitle(text) {
 export function NotesScreen(props) {
   const { notes, selectedId, onSelect, onCreate, onChange, onDelete } = props
   const [keyword, setKeyword] = useState('')
+  // 右键菜单：记下坐标和被点的那条笔记，null 表示菜单没开。
+  const [menu, setMenu] = useState(null)
 
   const search = keyword.trim().toLowerCase()
   const ordered = [...notes].sort((left, right) => (
@@ -1104,6 +1106,28 @@ export function NotesScreen(props) {
     ? ordered.filter((note) => String(note.text || '').toLowerCase().includes(search))
     : ordered
   const selected = notes.find((note) => note.id === selectedId) || null
+
+  // 菜单开着时，点别处 / 按 Esc / 页面滚动都关掉它——
+  // 菜单是 fixed 定位在光标处的，不关就会悬在旧位置指向另一条笔记。
+  // document 从右键时那个元素的 ownerDocument 拿：面板可能渲染在宿主自己的文档里，
+  // 这样拿到的就是真正在用的那份文档，而不是某个闭包里的全局变量。
+  const menuDoc = menu && menu.doc
+  useEffect(() => {
+    if (!menuDoc) return undefined
+    const close = () => setMenu(null)
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setMenu(null)
+    }
+    menuDoc.addEventListener('pointerdown', close)
+    menuDoc.addEventListener('keydown', onKeyDown)
+    // 捕获阶段监听滚动：滚动发生在列表内部时也能收到。
+    menuDoc.addEventListener('scroll', close, true)
+    return () => {
+      menuDoc.removeEventListener('pointerdown', close)
+      menuDoc.removeEventListener('keydown', onKeyDown)
+      menuDoc.removeEventListener('scroll', close, true)
+    }
+  }, [menuDoc])
 
   const list = h('aside', { className: 'pmplan-notes-list', 'aria-label': '笔记列表' },
     h('div', { className: 'pmplan-notes-bar' },
@@ -1125,7 +1149,19 @@ export function NotesScreen(props) {
           type: 'button',
           className: cx('pmplan-note-item', note.id === selectedId && 'pmplan-note-item-on'),
           'aria-pressed': note.id === selectedId ? 'true' : 'false',
-          onClick: () => onSelect(note.id)
+          title: '右键删除这条笔记',
+          onClick: () => onSelect(note.id),
+          // 右键是删除笔记的唯一入口，所以一定要拦掉浏览器自带的菜单。
+          onContextMenu: (event) => {
+            event.preventDefault()
+            onSelect(note.id)
+            setMenu({
+              id: note.id,
+              x: event.clientX,
+              y: event.clientY,
+              doc: event.currentTarget.ownerDocument
+            })
+          }
         },
         h('span', { className: 'pmplan-note-item-title' }, noteTitle(note.text)),
         h('span', { className: 'pmplan-note-item-time' }, shortTime(note.updatedAt))
@@ -1149,7 +1185,8 @@ export function NotesScreen(props) {
           h('span', { className: 'pmplan-small pmplan-muted' },
             `创建 ${shortTime(selected.createdAt)} · 更新 ${shortTime(selected.updatedAt)} · ${selected.text.length} 字`),
           h('span', { className: 'pmplan-spacer' }),
-          h(Button, { size: 'small', variant: 'danger', onClick: () => onDelete(selected.id) }, '删除')
+          // 删除收进了右键菜单，这里留一句提示，免得功能变得找不到。
+          h('span', { className: 'pmplan-small pmplan-muted' }, '右键左边的笔记可删除')
         )
       )
     : h('section', { className: 'pmplan-notes-editor pmplan-notes-blank' },
@@ -1157,5 +1194,26 @@ export function NotesScreen(props) {
           notes.length ? '在左边选一条笔记开始编辑。' : '还没有笔记，点「新建笔记」开始。')
       )
 
-  return h('div', { className: 'pmplan-notes' }, list, editor)
+  const menuNode = menu
+    ? h('div', {
+        className: 'pmplan-note-menu',
+        role: 'menu',
+        style: { left: `${menu.x}px`, top: `${menu.y}px` },
+        // 菜单自己吞掉 pointerdown，否则「点别处关闭」会在点击落到菜单上之前就把它关掉。
+        onPointerDown: (event) => event.stopPropagation()
+      },
+      h('button', {
+        type: 'button',
+        role: 'menuitem',
+        className: 'pmplan-note-menu-item',
+        onClick: () => {
+          const target = menu.id
+          setMenu(null)
+          onDelete(target)
+        }
+      }, '删除')
+    )
+    : null
+
+  return h('div', { className: 'pmplan-notes' }, list, editor, menuNode)
 }

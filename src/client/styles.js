@@ -502,17 +502,22 @@ export const styles = `
 
 /* ---------- 笔记（左列表 + 右编辑器） ---------- */
 /* 两栏：左边固定宽度的列表、右边自适应宽度的编辑器。min-width: 0 是必需的，
-   否则 textarea 的默认宽度会把网格列顶开、右边的编辑器溢出容器。 */
+   否则 textarea 的默认宽度会把网格列顶开、右边的编辑器溢出容器。
+   flex: 1 1 auto 让整块撑满内容区高度，编辑框才能一路到底。 */
 .pmplan-notes {
   display: grid;
   grid-template-columns: minmax(190px, 290px) 1fr;
   gap: 12px;
-  align-items: start;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .pmplan-notes-list {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* 列表按内容高度贴顶，不跟着右栏一起拉长 */
+  align-self: start;
   max-height: 64vh;
   overflow-y: auto;
   padding-right: 2px;
@@ -537,9 +542,11 @@ export const styles = `
 .pmplan-note-item-on { border-color: var(--pm-accent); background: var(--pm-accent-soft); }
 .pmplan-note-item-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pmplan-note-item-time { font-size: 11px; color: var(--pm-fg-muted); }
-.pmplan-notes-editor { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pmplan-notes-editor { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+/* flex: 1 1 auto 让正文框吃掉右栏剩下的高度（一直到底），下面留出底栏一行。 */
 .pmplan-note-body {
   width: 100%;
+  flex: 1 1 auto;
   min-height: 320px;
   resize: vertical;
   font-family: inherit;
@@ -553,7 +560,32 @@ export const styles = `
   border: 1px dashed var(--pm-border);
   border-radius: var(--pm-radius-s);
 }
-.pmplan-notes-foot { display: flex; align-items: center; gap: 8px; }
+.pmplan-notes-foot { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+
+/* 右键菜单：fixed 定位在光标处，所以左边的坐标是 clientX/clientY（视口坐标）。 */
+.pmplan-note-menu {
+  position: fixed;
+  z-index: 15;
+  min-width: 104px;
+  padding: 4px;
+  border: 1px solid var(--pm-border);
+  border-radius: var(--pm-radius-s);
+  background: var(--pm-bg);
+  box-shadow: var(--pm-shadow);
+}
+.pmplan-note-menu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--pm-radius-s);
+  background: transparent;
+  color: var(--pm-danger);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pmplan-note-menu-item:hover { background: var(--pm-accent-soft); }
 
 /* ---------- 看板 ---------- */
 
