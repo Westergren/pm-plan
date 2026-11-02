@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Badge, Button, Card, Empty, Kpi, Progress, Select, TextArea, cx } from './ui.js'
+import { Badge, Button, Card, Dot, Empty, Kpi, Progress, Select, TextArea, cx } from './ui.js'
 import { BarList, Donut, StackedBars } from './charts.js'
 import {
   RISK_TONE,
@@ -18,18 +18,30 @@ import {
   projectRisk,
   riskBreakdown,
   riskItems,
+  urgencyTone,
   statusColumns,
   todayBuckets
 } from '../shared/metrics.js'
 import { groupByModule, groupByPlatform, sortOrders, sortPlans, weekBoard } from '../shared/views.js'
 import { REPORT_KINDS } from '../shared/report.js'
-import { WEEKDAY_LABELS, formatDate, formatDayLabel, formatShortDate, monthGrid, shiftMonth } from '../shared/date.js'
+import { WEEKDAY_LABELS, formatDate, formatDateTime, formatDayLabel, formatShortDate, monthGrid, shiftMonth } from '../shared/date.js'
 import { MAX_NOTE_LENGTH, PLAN_STATUS } from '../shared/model.js'
 
 const h = require('react').createElement
 
 function toneOf(level) {
   return RISK_TONE[level] || 'muted'
+}
+
+/**
+ * 标题 + 紧急程度色点。计划有 urgency，工单没有（传空），此时只渲染标题，
+ * 保证两类条目在同一列表里左边缘对齐，不会因为有无色点而参差不齐。
+ */
+function UrgencyTitle({ level, text }) {
+  return h('span', { className: 'pmplan-urgency-row' },
+    level ? h(Dot, { tone: urgencyTone(level), label: `紧急程度：${level}` }) : null,
+    h('span', { className: 'pmplan-item-title' }, text)
+  )
 }
 
 function ItemButton({ title, meta, tone, onClick, key }) {
@@ -267,7 +279,9 @@ export function OverviewScreen(props) {
       )
     ),
     h(Card, { key: 'week', title: `本周（${board.start} ~ ${board.end}）` },
-      h('div', { className: 'pmplan-board' },
+      // 一周 7 天固定排成 4 列 × 2 行（周一到周四 / 周五到周日），整周一眼看全，
+      // 不再按容器宽度自动折成 5+2、6+1 这种读不出「哪几天」的排法。
+      h('div', { className: 'pmplan-board pmplan-board-week' },
         board.days.map((day) => h('div', { className: 'pmplan-board-col', key: day.date },
           h('div', { className: 'pmplan-board-head' },
             h('span', null, formatDayLabel(day.date)),
@@ -280,11 +294,10 @@ export function OverviewScreen(props) {
               ? day.items.map((item) => h('div', { className: 'pmplan-item', key: `${item.kind}-${item.id}` },
                   h('button', {
                     type: 'button',
-                    className: 'pmplan-btn',
+                    className: 'pmplan-btn pmplan-btn-block',
                     'data-variant': 'ghost',
-                    style: { textAlign: 'left', padding: 0 },
                     onClick: () => (item.kind === 'order' ? onOpenOrder(item.id) : onOpenPlan(item.id))
-                  }, h('span', { className: 'pmplan-item-title' }, item.title)),
+                  }, h(UrgencyTitle, { level: item.kind === 'plan' ? item.urgency : '', text: item.title })),
                   h('span', { className: 'pmplan-item-meta' },
                     h(Badge, { tone: toneOf(item.risk), children: item.risk }),
                     `${item.sourceName} · ${item.meta}`
@@ -570,7 +583,8 @@ export function OrdersScreen(props) {
 export function PlansScreen(props) {
   const { scoped, today, onOpenPlan, onEditPlan, onDelete } = props
   const [mode, setMode] = useState('table')
-  const [sortMode, setSortMode] = useState('risk')
+  // 默认按创建时间：新建的计划排在最上面，刚建完立刻看得见。
+  const [sortMode, setSortMode] = useState('created')
   const [keyword, setKeyword] = useState('')
   // 计划搜索：按标题模糊匹配。
   const search = keyword.trim().toLowerCase()
@@ -598,6 +612,7 @@ export function PlansScreen(props) {
         value: sortMode,
         onChange: setSortMode,
         options: [
+          { value: 'created', label: '按创建时间' },
           { value: 'risk', label: '按风险' },
           { value: 'due', label: '按完成日期' },
           { value: 'status', label: '按状态' }
@@ -622,11 +637,12 @@ export function PlansScreen(props) {
                 h('th', null, '开始日期'),
                 h('th', null, '完成日期'),
                 h('th', null, '风险'),
+                h('th', null, '创建时间'),
                 h('th', { className: 'pmplan-cell-actions' }, '操作')
               )),
               h('tbody', null, rows.map((plan) => h('tr', { key: plan.id },
                 h('td', { className: 'pmplan-title-cell' },
-                  h('button', { type: 'button', className: 'pmplan-btn', 'data-variant': 'ghost', style: { padding: 0 }, onClick: () => onOpenPlan(plan.id) }, plan.title)
+                  h('button', { type: 'button', className: 'pmplan-btn', 'data-variant': 'ghost', style: { padding: 0 }, onClick: () => onOpenPlan(plan.id) }, h(UrgencyTitle, { level: plan.urgency, text: plan.title }))
                 ),
                 h('td', { className: 'pmplan-muted' }, plan.moduleName),
                 h('td', null, h(Badge, { tone: plan.status === '已完成' ? 'ok' : plan.status === '进行中' ? 'info' : 'muted', children: plan.status })),
@@ -634,6 +650,7 @@ export function PlansScreen(props) {
                 h('td', { className: 'pmplan-nums' }, formatDate(plan.startedOn, '未排期')),
                 h('td', { className: 'pmplan-nums' }, formatDate(plan.dueDate, '未排期')),
                 h('td', null, h(Badge, { tone: toneOf(plan.risk), children: plan.risk })),
+                h('td', { className: 'pmplan-nums pmplan-muted' }, formatDateTime(plan.createdAt, '—')),
                 h('td', { className: 'pmplan-cell-actions' },
                   h(Button, { size: 'small', onClick: () => onEditPlan(plan) }, '编辑'),
                   h(Button, { size: 'small', variant: 'danger', onClick: () => onDelete('plan', plan.id) }, '删除')
@@ -652,7 +669,7 @@ export function PlansScreen(props) {
                 bucket.items.length
                   ? bucket.items.map((plan) => h('div', { className: 'pmplan-item', key: plan.id },
                       h('button', { type: 'button', className: 'pmplan-btn pmplan-btn-block', 'data-variant': 'ghost', style: { padding: 0, textAlign: 'left' }, onClick: () => onOpenPlan(plan.id) },
-                        h('span', { className: 'pmplan-item-title' }, plan.title)
+                        h(UrgencyTitle, { level: plan.urgency, text: plan.title })
                       ),
                       h('span', { className: 'pmplan-item-meta' },
                         h(Badge, { tone: toneOf(plan.risk), children: plan.risk }),

@@ -200,6 +200,13 @@ test('sortOrders / sortPlans 支持多种排序', () => {
   assert.equal(sortPlans(plans, today, 'risk')[0].id, 'n2')
   const donePlan = plan({ id: 'n3', status: '已完成', dueDate: addDays(today, 40) })
   assert.equal(sortPlans([...plans, donePlan], today, 'risk').some((item) => item.id === 'n3'), true)
+  // 按创建时间：新的排前面；缺 createdAt 的老数据沉到最后
+  const dated = [
+    plan({ id: 'old', createdAt: '2026-01-05T02:00:00.000Z' }),
+    plan({ id: 'new', createdAt: '2026-09-30T08:00:00.000Z' }),
+    plan({ id: 'none', createdAt: '' })
+  ]
+  assert.deepEqual(sortPlans(dated, today, 'created').map((item) => item.id), ['new', 'old', 'none'])
 })
 
 test('weekBoard 把工单与计划落到周一到周日', () => {
@@ -215,4 +222,19 @@ test('weekBoard 把工单与计划落到周一到周日', () => {
   assert.equal(next.start, '2026-10-12')
   assert.equal(next.days[0].items.length, 1)
   assert.equal(next.days[3].items.length, 1)
+})
+
+test('weekBoard 只给计划条目带上紧急程度，工单条目没有这个字段', () => {
+  const orders = [order({ id: 'o1', dueDate: '2026-10-14' })]
+  const plans = [plan({ id: 'n1', dueDate: '2026-10-14', urgency: '紧急' })]
+  const board = weekBoard(orders, plans, '2026-10-12')
+  const items = board.days[2].items
+  assert.equal(items.length, 2)
+  const planItem = items.find((item) => item.kind === 'plan')
+  const orderItem = items.find((item) => item.kind === 'order')
+  assert.equal(planItem.urgency, '紧急')
+  assert.equal('urgency' in orderItem, false, '工单条目不该带紧急程度，否则界面上会多画一个色点')
+  // 老数据没有 urgency 时兜底「正常」，不能让色点因为 undefined 变成默认灰以外的样子
+  const legacy = weekBoard([], [plan({ id: 'n2', dueDate: '2026-10-14', urgency: undefined })], '2026-10-12')
+  assert.equal(legacy.days[2].items[0].urgency, '正常')
 })

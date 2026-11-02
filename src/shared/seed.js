@@ -78,7 +78,7 @@ export function sampleState(today = todayISO()) {
   }
 
   // 计划与工单一样直接挂模块，不再关联项目或工单。
-  const plan = (module, title, owner, status, startOffset, dueOffset, note) => {
+  const plan = (module, title, owner, status, startOffset, dueOffset, note, urgency = '正常') => {
     const id = createId('pln')
     plans.push({
       id,
@@ -86,6 +86,7 @@ export function sampleState(today = todayISO()) {
       title,
       owner,
       status,
+      urgency,
       startedOn: startOffset === null ? '' : addDays(today, startOffset),
       dueDate: dueOffset === null ? '' : addDays(today, dueOffset),
       note,
@@ -123,16 +124,16 @@ export function sampleState(today = todayISO()) {
   order('公司项目', 'WO-2608', '三季度需求池评审', '技术任务', '中', '待评审', '我', '', -10, 5,
     '汇总分行反馈，产出优先级清单。')
 
-  const p1 = plan('移动端开发', '与后端确认限额分级口径', '我', '进行中', -3, 1, '输出接口字段对照表。')
-  const p2 = plan('移动端开发', '安卓指纹失败机型复现', '我', '进行中', -1, 0, '覆盖 5 个主流机型。')
+  const p1 = plan('移动端开发', '与后端确认限额分级口径', '我', '进行中', -3, 1, '输出接口字段对照表。', '紧急')
+  const p2 = plan('移动端开发', '安卓指纹失败机型复现', '我', '进行中', -1, 0, '覆盖 5 个主流机型。', '紧急')
   const p3 = plan('移动端开发', '整理 6.2 提测清单', '我', '未开始', 1, 4, '含回归范围与冒烟用例。')
-  const p4 = plan('移动端开发', '推动业务确认校验规则', '我', '进行中', -5, -2, '已发两轮确认邮件，等待回复。')
+  const p4 = plan('移动端开发', '推动业务确认校验规则', '我', '进行中', -5, -2, '已发两轮确认邮件，等待回复。', '急')
   const p5 = plan('移动端开发', '百字段表单性能基线测试', '我', '未开始', 3, 6, '先建立基线数据。')
-  const p6 = plan('移动端开发', '联调开户主流程', '我', '进行中', -2, 3, '重点验证异常分支。')
+  const p6 = plan('移动端开发', '联调开户主流程', '我', '进行中', -2, 3, '重点验证异常分支。', '急')
   const p7 = plan('移动端开发', '整理小程序上线检查项', '我', '未开始', 8, 12, '版本号、灰度开关、回滚方案。')
   const p8 = plan('移动端开发', '梳理关键路径埋点清单', '我', '未开始', null, null, '未排期，等排期会确认。')
   const p9 = plan('日常工作', '本周移动端风险同步邮件', '我', '未开始', 0, 2, '把阻塞项升级给项目经理。')
-  const p10 = plan('日常工作', '测试环境巡检（三端）', '我', '进行中', -1, 0, '记录版本一致性结果。')
+  const p10 = plan('日常工作', '测试环境巡检（三端）', '我', '进行中', -1, 0, '记录版本一致性结果。', '急')
   const p11 = plan('其他项目', '组件库文档目录搭建', '我', '进行中', -6, 9, '先定目录结构。')
 
   log('project', projects[0].id, '进展', '6.2 需求评审通过，进入开发阶段。', -20)

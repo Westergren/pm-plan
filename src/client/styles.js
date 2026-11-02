@@ -622,6 +622,10 @@ export const styles = `
   min-width: 0;
 }
 
+/* 概览「本周」卡片：固定 4 列，7 天自然排成 2 行（周一到周四 / 周五到周日）。
+   窄容器退到 2 列，宁可竖着长，也不把一天的格子压到读不出标题。 */
+.pmplan-board-week { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
 .pmplan-board-col {
   border: 1px solid var(--pm-border);
   border-radius: var(--pm-radius);
@@ -663,6 +667,11 @@ export const styles = `
 .pmplan-item:hover { border-color: var(--pm-accent); }
 .pmplan-item-title { font-weight: 600; overflow-wrap: anywhere; }
 .pmplan-item-meta { font-size: 11.5px; color: var(--pm-fg-muted); display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* 计划标题前的紧急程度色点：点跟首行文字对齐，标题换行时点不会掉到中间。 */
+.pmplan-urgency-row { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
+.pmplan-urgency-row > .pmplan-dot { margin-top: 0.42em; }
+.pmplan-urgency-row > .pmplan-item-title { min-width: 0; }
 
 .pmplan-module-section { display: flex; flex-direction: column; gap: 8px; }
 
@@ -985,6 +994,7 @@ export const styles = `
 }
 
 @container pmplan (max-width: 620px) {
+  .pmplan-board-week { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pmplan-kpis { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
   .pmplan-smart { grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); }
   .pmplan-smart-value { font-size: 18px; }

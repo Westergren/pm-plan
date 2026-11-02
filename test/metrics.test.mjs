@@ -17,6 +17,7 @@ import {
   riskBreakdown,
   riskItems,
   stageProgress,
+  urgencyTone,
   statusColumns,
   timeRatio,
   todayBuckets,
@@ -159,4 +160,12 @@ test('isOrderDone / isPlanDone 口径一致', () => {
   assert.equal(isPlanDone({ status: '已取消' }), true)
   assert.equal(isPlanDone({ status: '进行中' }), false)
   assert.equal(todayISO(new Date(2026, 9, 10)), '2026-10-10')
+})
+
+test('urgentTone：紧急=红、急=琥珀、正常=灰，未知值回落灰', () => {
+  assert.equal(urgencyTone('紧急'), 'danger')
+  assert.equal(urgencyTone('急'), 'warn')
+  assert.equal(urgencyTone('正常'), 'muted')
+  assert.equal(urgencyTone('特急'), 'muted')
+  assert.equal(urgencyTone(''), 'muted')
 })

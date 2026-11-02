@@ -55,6 +55,7 @@ import {
   ORDER_KINDS,
   ORDER_STAGES,
   PLAN_STATUS,
+  PLAN_URGENCY,
   PRIORITIES,
   PROJECT_STATUS,
   createId,
@@ -68,7 +69,8 @@ import {
   orderRisk,
   planRisk,
   projectRisk,
-  riskTone
+  riskTone,
+  urgencyTone
 } from '../shared/metrics.js'
 import { applyView, moduleOptions, platformOptions, projectSmartCounts, smartViewLabel, targetOptions } from '../shared/views.js'
 import { buildReport } from '../shared/report.js'
@@ -143,6 +145,8 @@ const EMPTY_PLAN = (module) => ({
   title: '',
   owner: '我',
   status: '未开始',
+  // 默认「正常」：新建计划时绝大多数就是常规事项，不该逼用户先想紧急程度。
+  urgency: '正常',
   startedOn: todayISO(),
   dueDate: addDays(todayISO(), 3),
   note: ''
@@ -1210,6 +1214,7 @@ function DetailDrawer({ type, item, projects, orders, plans, logs, docs, today, 
     ]
   },
     h('div', { className: 'pmplan-row' },
+      h(Badge, { tone: urgencyTone(item.urgency), children: `紧急程度：${item.urgency || '正常'}` }),
       h(Badge, { tone: RISK_TONE[risk], children: `风险 ${risk}` }),
       h(Badge, { tone: 'info', children: item.status }),
       h(Badge, { tone: 'muted', children: `模块：${item.module || '未归模块'}` })
@@ -1325,7 +1330,9 @@ function EditorModal({ type, form, projects, orders, docs = [], folders = [], mo
     h(TextField, { key: 'title', label: '计划标题', value: draft.title, onChange: (value) => set({ title: value }), placeholder: '例如：与后端确认限额分级口径' }),
     h(FieldRow, { key: 'row1' },
       h(Select, { label: '模块', value: draft.module, onChange: (value) => set({ module: value }), options: toOptions(withCurrent(moduleNames, draft.module)), allowEmpty: true, emptyLabel: '未归模块' }),
-      h(Select, { label: '状态', value: draft.status, onChange: (value) => set({ status: value }), options: toOptions(PLAN_STATUS) })
+      h(Select, { label: '状态', value: draft.status, onChange: (value) => set({ status: value }), options: toOptions(PLAN_STATUS) }),
+      // 老草稿里可能没有 urgency，回落到「正常」，避免下拉框显示为空。
+      h(Select, { label: '紧急程度', value: draft.urgency || '正常', onChange: (value) => set({ urgency: value }), options: toOptions(PLAN_URGENCY) })
     ),
     h(FieldRow, { key: 'row2' },
       h(TextField, { label: '负责人', value: draft.owner, onChange: (value) => set({ owner: value }) }),

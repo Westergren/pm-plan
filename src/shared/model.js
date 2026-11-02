@@ -7,7 +7,7 @@
  *   config:   { modules: [名称], platforms: [名称] },   // 用户可在「设置」里增删改，缺字段时回落到 DEFAULT_*
  *   projects: [{ id, code, name, module, platform, status, owner, startedOn, dueDate, progress, link, summary, tags, createdAt, updatedAt }],
  *   orders:   [{ id, code, module, title, kind, priority, stage, owner, target, dueDate, createdOn, description, createdAt, updatedAt }],
- *   plans:    [{ id, module, title, owner, status, startedOn, dueDate, note, createdAt, updatedAt }],
+ *   plans:    [{ id, module, title, owner, status, urgency, startedOn, dueDate, note, createdAt, updatedAt }],
  *   logs:     [{ id, refType, refId, at, kind, text }],
  *   notes:    [{ id, text, createdAt, updatedAt }]
  * }
@@ -50,6 +50,12 @@ export const ORDER_STAGES = ['待评审', '待排期', '开发中', '联调中',
 export const PRIORITIES = ['紧急', '高', '中', '低']
 
 export const PLAN_STATUS = ['未开始', '进行中', '已完成', '已取消']
+
+/**
+ * 计划的紧急程度（与工单的「优先级」是两套概念：优先级排的是工单先做哪个，
+ * 紧急程度标的是这条计划本身有多急）。顺序即轻重，界面上按这个顺序画颜色。
+ */
+export const PLAN_URGENCY = ['紧急', '急', '正常']
 
 export const LOG_KINDS = ['进展', '阻塞', '决策', '变更', '上线']
 
@@ -255,6 +261,8 @@ export function normalizeState(raw, { now = new Date().toISOString() } = {}) {
       title,
       owner: asText(item.owner).trim().slice(0, 40) || '我',
       status: asEnum(item.status, PLAN_STATUS, '未开始'),
+      // 存量计划没有 urgency：一律收到「正常」，界面上不会因为缺字段而少画一个标记。
+      urgency: asEnum(item.urgency, PLAN_URGENCY, '正常'),
       startedOn: asDate(item.startedOn),
       dueDate: asDate(item.dueDate),
       note: asText(item.note).slice(0, 2000),

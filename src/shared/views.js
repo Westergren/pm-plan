@@ -221,6 +221,17 @@ export function sortOrders(orders, today = todayISO(), mode = 'risk') {
 
 export function sortPlans(plans, today = todayISO(), mode = 'risk') {
   const items = attachModuleName(plans.map((plan) => ({ ...plan, risk: planRisk(plan, today) })))
+  // 新建的排最上面；缺创建时间的兜到末尾，别把老数据顶到列表开头。
+  if (mode === 'created') {
+    return items.sort((left, right) => {
+      const leftAt = left.createdAt || ''
+      const rightAt = right.createdAt || ''
+      if (!leftAt && !rightAt) return 0
+      if (!leftAt) return 1
+      if (!rightAt) return -1
+      return rightAt.localeCompare(leftAt)
+    })
+  }
   if (mode === 'due') return items.sort((left, right) => (left.dueDate || '9999').localeCompare(right.dueDate || '9999'))
   if (mode === 'status') return items.sort((left, right) => left.status.localeCompare(right.status, 'zh-Hans-CN') || (left.dueDate || '9999').localeCompare(right.dueDate || '9999'))
   return items.sort((left, right) => riskRank(left.risk) - riskRank(right.risk) || (left.dueDate || '9999').localeCompare(right.dueDate || '9999'))
@@ -244,6 +255,8 @@ export function weekBoard(orders, plans, today = todayISO()) {
       if (isPlanDone(plan) || plan.dueDate !== date) continue
       items.push({
         kind: 'plan', id: plan.id, title: plan.title, risk: planRisk(plan, today),
+        // 紧急程度只挂在计划上；工单条目没有这个字段，界面上自然不画色点。
+        urgency: plan.urgency || '正常',
         sourceName: plan.module || '未归模块', owner: plan.owner, meta: plan.status
       })
     }

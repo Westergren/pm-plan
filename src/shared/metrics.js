@@ -159,6 +159,16 @@ export function riskTone(level) {
   return RISK_TONE[level] || 'muted'
 }
 
+/**
+ * 计划紧急程度的配色：紧急=红、急=琥珀、正常=灰。
+ * 「正常」刻意用最不显眼的灰——它是最常见的取值，标签本身不该抢注意力。
+ */
+export const URGENCY_TONE = { 紧急: 'danger', 急: 'warn', 正常: 'muted' }
+
+export function urgencyTone(level) {
+  return URGENCY_TONE[level] || 'muted'
+}
+
 /** 把一组带「需关注」判定的项目拆开：需关注 = 风险低于「正常」。 */
 export function needsAttention(level) {
   return ['已逾期', '阻塞', '紧急', '进度风险'].includes(level)

@@ -7,6 +7,7 @@ import {
   DEFAULT_PLATFORMS,
   MAX_NOTE_LENGTH,
   ORDER_STAGES,
+  PLAN_URGENCY,
   createId,
   emptyState,
   nextStage,
@@ -155,4 +156,19 @@ test('仓库里没有把业务数据写死在客户端入口', async () => {
   const source = await readFile(new URL('../src/client/index.js', import.meta.url), 'utf8')
   assert.ok(source.includes('desktopWorkbenches.register'))
   assert.ok(!source.includes('localStorage'))
+})
+
+test('计划紧急程度收敛：缺字段与非法值都回落「正常」，合法值原样保留', () => {
+  const state = normalizeState({
+    plans: [
+      { id: 'a', title: '没有紧急程度的老计划' },
+      { id: 'b', title: '脏值', urgency: '特急' },
+      { id: 'c', title: '紧急', urgency: '紧急' },
+      { id: 'd', title: '急', urgency: '急' }
+    ]
+  })
+  assert.deepEqual(PLAN_URGENCY, ['紧急', '急', '正常'])
+  assert.deepEqual(state.plans.map((plan) => plan.urgency), ['正常', '正常', '紧急', '急'])
+  // 收敛要幂等：第二次不应该再改动任何字段
+  assert.deepEqual(normalizeState(state), state)
 })

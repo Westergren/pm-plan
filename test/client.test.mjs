@@ -358,6 +358,52 @@ test('jsdom 挂载：计划列表没有「完成」勾选列，改状态要走�
   }
 })
 
+test('计划紧急程度：表单三档可选、默认「正常」，保存后标题前画对应颜色的点', async () => {
+  const panel = await mountPanel()
+  try {
+    await panel.flush()
+    const tab = (name) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === name)
+    await panel.act(() => click(tab('计划')))
+
+    const rowOf = (text) => [...panel.document.querySelectorAll('.pmplan-table tbody tr')]
+      .find((row) => row.textContent.includes(text))
+    const dotOf = (row) => row.querySelector('.pmplan-urgency-row .pmplan-dot')
+
+    // 示例数据里「与后端确认限额分级口径」是紧急：标题前应有一个红点，并且带无障碍文案
+    const urgentRow = rowOf('与后端确认限额分级口径')
+    assert.ok(urgentRow, '示例数据里找不到那条紧急计划')
+    assert.equal(dotOf(urgentRow)?.getAttribute('data-tone'), 'danger', '紧急计划的标题前没有红色标记')
+    assert.equal(dotOf(urgentRow)?.getAttribute('aria-label'), '紧急程度：紧急')
+
+    // 新建计划：默认「正常」，下拉框只有三档
+    const createButton = [...panel.document.body.querySelectorAll('button')].find((node) => node.textContent === '新建计划')
+    await panel.act(() => click(createButton))
+    const dialog = panel.document.querySelector('[role="dialog"]')
+    const field = (label) => [...dialog.querySelectorAll('.pmplan-field')]
+      .find((node) => node.querySelector('label')?.textContent === label)
+    assert.ok(field('紧急程度'), '计划表单里没有「紧急程度」字段')
+    assert.deepEqual(
+      [...field('紧急程度').querySelectorAll('option')].map((node) => node.textContent),
+      ['紧急', '急', '正常']
+    )
+    assert.equal(field('紧急程度').querySelector('select').value, '正常', '新建计划不该默认成紧急')
+
+    // 改成「急」并保存
+    await panel.act(() => typeInto(panel, field('计划标题').querySelector('input'), '灰度回滚演练'))
+    await panel.act(() => selectInto(panel, field('紧急程度').querySelector('select'), '急'))
+    await panel.act(() => click([...dialog.querySelectorAll('button')].find((node) => node.textContent === '保存')))
+    await panel.flush(700)
+
+    const saved = panel.fake.memory.state.plans.find((plan) => plan.title === '灰度回滚演练')
+    assert.equal(saved?.urgency, '急', '保存后没有把紧急程度写回数据')
+    const savedRow = rowOf('灰度回滚演练')
+    assert.ok(savedRow, '保存后的计划没有出现在列表里')
+    assert.equal(dotOf(savedRow)?.getAttribute('data-tone'), 'warn', '「急」没有画成琥珀色标记')
+  } finally {
+    await panel.cleanup()
+  }
+})
+
 test('jsdom 挂载：工单按编号或标题搜索，计划按标题搜索', async () => {
   const panel = await mountPanel()
   try {
@@ -804,12 +850,22 @@ test('jsdom 挂载：计划页显示模块与投产日期，没有进度列', as
     const tab = (label) => [...panel.document.querySelectorAll('[role="tab"]')].find((node) => node.textContent === label)
     await panel.act(() => click(tab('计划')))
     const headers = [...panel.document.querySelectorAll('thead th')].map((node) => node.textContent)
-    assert.deepEqual(headers, ['计划', '模块', '状态', '负责人', '开始日期', '完成日期', '风险', '操作'])
+    assert.deepEqual(headers, ['计划', '模块', '状态', '负责人', '开始日期', '完成日期', '风险', '创建时间', '操作'])
     assert.ok(!panel.document.body.textContent.includes('进度'), '计划页不该再有进度')
     assert.ok(panel.document.body.textContent.includes('移动端开发'), '计划列表没有显示模块名')
     // 开始日期要有真实取值（示例计划都有开始日期）
     const firstRowCells = [...panel.document.querySelectorAll('.pmplan-table tbody tr')[0].querySelectorAll('td')]
     assert.match(firstRowCells[4].textContent.trim(), /^\d{4}-\d{2}-\d{2}$/, '开始日期列没有显示日期')
+    assert.match(firstRowCells[7].textContent.trim(), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/, '创建时间列没有显示到分钟')
+
+    // 默认按创建时间倒序：列里是 YYYY-MM-DD HH:mm，字符串降序就是时间倒序
+    const createdCells = [...panel.document.querySelectorAll('.pmplan-table tbody tr')]
+      .map((row) => row.querySelectorAll('td')[7].textContent.trim())
+    assert.deepEqual(createdCells, [...createdCells].sort().reverse(), '计划列表没有按创建时间倒序')
+    const sortSelect = [...panel.document.querySelectorAll('select')]
+      .find((node) => [...node.options].some((option) => option.textContent === '按创建时间'))
+    assert.ok(sortSelect, '计划页没有「按创建时间」排序项')
+    assert.equal(sortSelect.value, 'created', '计划页默认没有按创建时间排序')
     // 操作列的编辑/删除原本挨在一起：确认两个按钮是相邻兄弟且都带 .pmplan-btn，
     // 否则补间距的 `+` 选择器不会命中。
     const actionButtons = [...panel.document.querySelectorAll('.pmplan-table tbody tr td.pmplan-cell-actions button')].slice(0, 2)
@@ -943,6 +999,18 @@ test('看板样式：阶段列按行平铺，不再横向滚动；卡片标题�
   assert.ok(!board.includes('grid-auto-flow: column'), '阶段列仍是横向排布')
   assert.ok(!board.includes('overflow-x'), '阶段列仍靠横向滚动')
   assert.ok(board.includes('repeat(auto-fill'), '阶段列没有改成可换行的平铺网格')
+  // 概览「本周」是唯一固定列数的看板：4 列让 7 天排成 2 行，而不是按宽度乱折。
+  const week = css.slice(css.indexOf('.pmplan-board-week {'), css.indexOf('.pmplan-board-col'))
+  assert.ok(week.includes('repeat(4, minmax(0, 1fr))'), '「本周」看板没有固定成 4 列')
+  assert.ok(
+    css.indexOf('.pmplan-board-week {') > css.indexOf('.pmplan-board {'),
+    '「本周」的列规则写在通用看板之前，覆盖不掉 auto-fill'
+  )
+  const narrow = css.slice(css.indexOf('@container pmplan (max-width: 620px)'))
+  assert.ok(
+    narrow.includes('.pmplan-board-week { grid-template-columns: repeat(2, minmax(0, 1fr)); }'),
+    '窄容器下「本周」看板没有退到 2 列'
+  )
   // 表格操作列的两个按钮原本挨在一起，靠相邻兄弟外边距补间距
   assert.ok(
     css.includes('.pmplan-table td.pmplan-cell-actions .pmplan-btn + .pmplan-btn { margin-left: 6px; }'),
@@ -950,6 +1018,34 @@ test('看板样式：阶段列按行平铺，不再横向滚动；卡片标题�
   )
   const block = css.slice(css.indexOf('.pmplan-btn-block'), css.indexOf('.pmplan-btn-block:hover'))
   assert.ok(block.includes('white-space: normal'), '卡片标题按钮仍然禁止换行')
+})
+
+test('概览「本周」卡片：固定 4 列 × 2 行，且到期项标题允许换行不顶出卡片', async () => {
+  // 面板按「真实今天」切本周，所以样本也要按真实今天生成，否则卡片里没有到期项。
+  const { todayISO } = await import('../src/shared/date.js')
+  const panel = await mountPanel({ state: normalizeState(sampleState(todayISO())) })
+  try {
+    await panel.flush()
+    // 面板里同时挂着多张业务屏，必须按卡片标题定位「本周」这块，不能取第一个看板。
+    const weekTitle = [...panel.document.querySelectorAll('.pmplan-card-title')]
+      .find((node) => node.textContent.startsWith('本周'))
+    assert.ok(weekTitle, '概览没有渲染「本周」卡片')
+    const board = weekTitle.closest('.pmplan-card').querySelector('.pmplan-board')
+    assert.ok(board, '概览没有渲染「本周」看板')
+    assert.ok(board.classList.contains('pmplan-board-week'), '「本周」看板没套用固定 4 列的布局类')
+    const cols = [...board.children].filter((node) => node.classList.contains('pmplan-board-col'))
+    assert.equal(cols.length, 7, '「本周」看板不是完整的 7 天，4 列排不出 2 行')
+    const buttons = [...board.querySelectorAll('.pmplan-item .pmplan-btn')]
+    assert.ok(buttons.length > 0, '「本周」看板里没有到期项，测试样本失效')
+    const nowrap = buttons.filter((node) => !node.classList.contains('pmplan-btn-block'))
+    assert.equal(nowrap.length, 0, `有 ${nowrap.length} 个标题按钮仍是 nowrap，长标题会溢出卡片`)
+    assert.ok(
+      buttons.some((node) => node.querySelector('.pmplan-item-title')?.textContent.trim()),
+      '「本周」看板没有渲染出带标题的到期项，断言失去意义'
+    )
+  } finally {
+    await panel.cleanup()
+  }
 })
 
 /* ---------------- 笔记 ---------------- */

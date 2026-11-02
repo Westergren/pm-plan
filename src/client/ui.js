@@ -45,6 +45,21 @@ export function Badge({ tone = 'muted', children, title }) {
   return h('span', { className: 'pmplan-badge', 'data-tone': tone, title }, children)
 }
 
+/**
+ * 纯色圆点标记，颜色由 data-tone 决定（danger / warn / info / ok / muted）。
+ * 圆点本身不携带语义，所以要求调用方给出 label：它同时进 title 与 aria-label，
+ * 鼠标悬停和读屏都能拿到「这颜色代表什么」。
+ */
+export function Dot({ tone = 'muted', label, title }) {
+  return h('span', {
+    className: 'pmplan-dot',
+    'data-tone': tone,
+    title: title || label || undefined,
+    'aria-label': label || undefined,
+    role: label ? 'img' : undefined
+  })
+}
+
 export function Progress({ value = 0, tone = 'info', label }) {
   const width = Math.max(0, Math.min(100, Number(value) || 0))
   return h('div', {
